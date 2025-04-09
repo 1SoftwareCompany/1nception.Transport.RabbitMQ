@@ -1,8 +1,8 @@
 <Project>
 
   <PropertyGroup>
-    <Authors>Elders OSS</Authors>
-    <Company>Elders OSS</Company>
+    <Authors>1Software</Authors>
+    <Company>1Software</Company>
 
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
