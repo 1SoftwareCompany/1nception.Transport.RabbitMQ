@@ -99,8 +99,8 @@ stages:
       inputs:
         targetType: 'inline'
         script: |
-          time curl -L https://github.com/Elders/blob/releases/download/SemRel-01/node_modules.tar.gz | tar mx -I pigz
-          time npx semantic-release --no-ci
+         npm install -g semantic-release@22.0.12 @semantic-release/exec@latest @semantic-release/changelog@latest @semantic-release/git@latest
+         time npx semantic-release --no-ci
           # few commands for debugging purposes
           ls -l $STAGING_PATH/*.nupkg
           echo dotnet msbuild `dotnet msbuild --version`
