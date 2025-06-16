@@ -111,7 +111,7 @@ public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
         {
             // TODO: send to dead letter exchange/queue
             // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
-            logger.LogError(ex, "Failed to process message. Failed to deserialize: {0}", Convert.ToBase64String(ev.Body.ToArray()));
+            logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
             Ack(ev, consumer);
             return;
         }
