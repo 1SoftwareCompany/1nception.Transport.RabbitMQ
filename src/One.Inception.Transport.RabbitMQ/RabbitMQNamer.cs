@@ -59,7 +59,6 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
 
         if (typeof(IPublicEvent).IsAssignableFrom(messageType))
         {
-
             if (boundedContext.Name.Equals(bc, StringComparison.OrdinalIgnoreCase))
                 yield return $"{bc}.{systemMarker}Events";
             else
@@ -71,7 +70,7 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
         if (typeof(ISignal).IsAssignableFrom(messageType))
         {
             yield return $"{systemMarker}Signals";
-            yield return $"{bc}.{systemMarker}Signals";
+
             isConventionalMessageType = true;
         }
 
@@ -97,6 +96,7 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
         else if (typeof(ISignal).IsAssignableFrom(messageType))
         {
             yield return $"Signals";
+            yield return $"Signals.Delayer";
         }
         else
             yield break;
@@ -139,10 +139,7 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
 
         if (typeof(ISignal).IsAssignableFrom(messageType))
         {
-            if (boundedContext.Name.Equals(bc, StringComparison.OrdinalIgnoreCase))
-                yield return $"{bc}.{systemMarker}Signals";
-            else
-                yield return $"{systemMarker}Signals";
+            yield return $"{systemMarker}Signals";
 
             isConventionalMessageType = true;
         }
