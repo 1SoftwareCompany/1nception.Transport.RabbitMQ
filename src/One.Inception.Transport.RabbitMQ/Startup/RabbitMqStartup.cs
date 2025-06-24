@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 using System.Linq;
-using System.Reflection.PortableExecutable;
 using One.Inception.EventStore.Index;
 using One.Inception.MessageProcessing;
 using One.Inception.Migrations;
@@ -101,7 +99,6 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
     private Dictionary<string, object> BuildQueueRoutingHeaders()
     {
         var routingHeaders = new Dictionary<string, object>();
-        routingHeaders.Add("x-match", "any");
 
         foreach (var subscriber in subscriberCollection.Subscribers)
         {
@@ -154,14 +151,15 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
         bool isTriggerQueue = typeof(T).Name.Equals(typeof(ITrigger).Name);
         bool isSagaQueue = typeof(T).Name.Equals(typeof(ISaga).Name) || typeof(T).Name.Equals(typeof(ISystemSaga).Name);
-        if (isSagaQueue)
+        if (isSagaQueue || isTriggerQueue)
         {
             bool hasOneExchangeGroup = bindToExchangeGroups.Count == 1;
             if (hasOneExchangeGroup)
             {
+                string targetExchangeAfterTtlExpires = bindToExchangeGroups[0].Key;
                 var arguments = new Dictionary<string, object>()
                 {
-                    { "x-dead-letter-exchange", bindToExchangeGroups[0].Key}
+                    { "x-dead-letter-exchange", targetExchangeAfterTtlExpires}
                 };
 
                 scheduledQueue = $"{queueName}.Scheduled";
@@ -183,7 +181,6 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             model.ExchangeDeclare(standardExchangeName, PipelineType.Headers.ToString(), true, false, null);
 
             var bindHeaders = new Dictionary<string, object>();
-            bindHeaders.Add("x-match", "any");
 
             foreach (Type msgType in exchangeGroup.Select(x => x.MessageType))
             {

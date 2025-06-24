@@ -1,5 +1,4 @@
 ﻿using System.Collections.Generic;
-using One.Inception.Multitenancy;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;

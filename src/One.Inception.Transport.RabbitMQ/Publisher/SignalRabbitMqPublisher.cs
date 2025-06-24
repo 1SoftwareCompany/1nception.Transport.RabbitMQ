@@ -1,6 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
@@ -39,7 +39,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         {
             string messageBC = message.BoundedContext;
             messageType = message.GetMessageType();
-            IEnumerable<string> exchanges = rabbitMqNamer.Get_PublishTo_ExchangeNames(messageType);
+            IEnumerable<string> exchanges = GetExistingExchangesNames(message);
             bool isInternalSignal = boundedContext.Name.Equals(messageBC, StringComparison.OrdinalIgnoreCase); // if the message will be published internally to the same BC
 
             if (isInternalSignal)
@@ -147,5 +147,17 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         properties.Headers.Add("messageid", message.Id.ToByteArray());
 
         return properties;
+    }
+
+    private IEnumerable<string> GetExistingExchangesNames(InceptionMessage message)
+    {
+        Type messageType = message.GetMessageType();
+
+        IEnumerable<string> exchanges = rabbitMqNamer.Get_PublishTo_ExchangeNames(messageType);
+
+        if (string.IsNullOrEmpty(message.GetTtlMilliseconds()) == false)
+            exchanges = exchanges.Select(e => $"{e}.Delayer");
+
+        return exchanges;
     }
 }
