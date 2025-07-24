@@ -16,6 +16,7 @@ public class ConsumerFactory<T>
 {
     private readonly ILogger<ConsumerFactory<T>> logger;
     private readonly TypeContainer<ISaga> allSagas;
+    private readonly TypeContainer<ITrigger> allTriggers;
     private readonly ConsumerPerQueueChannelResolver channelResolver;
     private readonly ISerializer serializer;
     private readonly RabbitMqConsumerOptions consumerOptions;
@@ -26,11 +27,12 @@ public class ConsumerFactory<T>
     private readonly RabbitMqOptions options;
     private string queueName;
 
-    public ConsumerFactory(TypeContainer<ISaga> allSagas, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger)
+    public ConsumerFactory(TypeContainer<ISaga> allSagas, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger)
     {
         this.logger = logger;
         this.boundedContext = boundedContext.CurrentValue;
         this.allSagas = allSagas;
+        this.allTriggers = allTriggers;
         this.channelResolver = channelResolver;
         this.serializer = serializer;
         this.consumerOptions = consumerOptions.CurrentValue;
@@ -89,6 +91,17 @@ public class ConsumerFactory<T>
             bool isSystemSaga = typeof(ISystemSaga).IsAssignableFrom(typeof(T));
             bool hasRegisteredSagas = allSagas.Items.Where(saga => typeof(ISystemSaga).IsAssignableFrom(saga) == isSystemSaga).Any();
             if (hasRegisteredSagas)
+            {
+                schedulePoker.PokeAsync(cancellationToken);
+            }
+        }
+
+        bool isTrigger = typeof(ITrigger).IsAssignableFrom(typeof(T));
+        if (isTrigger)
+        {
+            bool isSystemTrigger = typeof(ISystemTrigger).IsAssignableFrom(typeof(T));
+            bool hasRegisteredTriggers = allTriggers.Items.Where(trigger => typeof(ISystemTrigger).IsAssignableFrom(trigger) == isSystemTrigger).Any();
+            if (hasRegisteredTriggers)
             {
                 schedulePoker.PokeAsync(cancellationToken);
             }
