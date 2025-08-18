@@ -96,12 +96,12 @@ public class ConsumerFactory<T>
             }
         }
 
-        bool isTrigger = typeof(ITrigger).IsAssignableFrom(typeof(T));
-        if (isTrigger)
+        Type theType = typeof(T);
+        bool isANormalTrigger = typeof(ITrigger).IsAssignableFrom(theType) && typeof(ISystemHandler).IsAssignableFrom(theType) == false;
+        if (isANormalTrigger) // as of 18.08.25 there is no record for scheduled system signals to exists, so I am skipping it entirely, because there is no such queue ISystemTrigger.Scheduled when we try to start consumers and it throws exception.
         {
-            bool isSystemTrigger = typeof(ISystemTrigger).IsAssignableFrom(typeof(T));
-            bool hasRegisteredTriggers = allTriggers.Items.Where(trigger => typeof(ISystemTrigger).IsAssignableFrom(trigger) == isSystemTrigger).Any();
-            if (hasRegisteredTriggers)
+            var allNormalTriggers = allTriggers.Items.Where(justTrigger => typeof(ISystemHandler).IsAssignableFrom(justTrigger) == false);
+            if (allNormalTriggers.Any())
             {
                 schedulePoker.PokeAsync(cancellationToken);
             }
