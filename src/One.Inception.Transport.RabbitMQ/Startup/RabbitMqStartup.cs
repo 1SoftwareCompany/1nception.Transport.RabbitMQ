@@ -14,7 +14,7 @@ namespace One.Inception.Transport.RabbitMQ.Startup;
 public abstract class RabbitMqStartup<T> : IInceptionStartup
 {
     private readonly BoundedContext boundedContext;
-    private readonly IOptionsMonitor<RabbitMqOptions> rmqOptions;
+    private readonly RabbitMqOptions rmqOptions;
     private readonly ISubscriberCollection<T> subscriberCollection;
     private readonly ConnectionResolver connectionResolver;
     private readonly BoundedContextRabbitMqNamer bcRabbitMqNamer;
@@ -24,11 +24,11 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
     private bool isSystemQueue = false;
     private readonly string queueName;
 
-    public RabbitMqStartup(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, ISubscriberCollection<T> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<RabbitMqStartup<T>> logger)
+    public RabbitMqStartup(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, ISubscriberCollection<T> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<RabbitMqStartup<T>> logger)
     {
         this.tenantsOptions = tenantsOptionsMonitor.CurrentValue;
         this.boundedContext = boundedContext.CurrentValue;
-        this.rmqOptions = rmqOptions;
+        this.rmqOptions = rmqOptions.Value;
         this.subscriberCollection = subscriberCollection;
         this.connectionResolver = connectionResolver;
         this.bcRabbitMqNamer = bcRabbitMqNamer;
@@ -44,9 +44,9 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
             tenantsOptions = newOptions;
 
-            IRabbitMqOptions scopedOptions = rmqOptions.CurrentValue.GetOptionsFor(boundedContext.CurrentValue.Name);
+            IRabbitMqOptions scopedOptions = rmqOptions.Value.GetOptionsFor(boundedContext.CurrentValue.Name);
 
-            using (var connection = connectionResolver.Resolve(boundedContext.CurrentValue.Name, scopedOptions))
+            using (var connection = connectionResolver.Resolve(rmqOptions.Value.VHost, scopedOptions))
             using (var channel = connection.CreateModel())
             {
                 RecoverModel(channel);
@@ -56,9 +56,9 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
     public void Bootstrap()
     {
-        IRabbitMqOptions scopedOptions = rmqOptions.CurrentValue.GetOptionsFor(boundedContext.Name);
+        IRabbitMqOptions scopedOptions = rmqOptions.GetOptionsFor(boundedContext.Name);
 
-        using (var connection = connectionResolver.Resolve(boundedContext.Name, scopedOptions))
+        using (var connection = connectionResolver.Resolve(rmqOptions.VHost, scopedOptions))
         using (var channel = connection.CreateModel())
         {
             RecoverModel(channel);
@@ -271,84 +271,84 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 [InceptionStartup(Bootstraps.Configuration)]
 public class AppService_Startup : RabbitMqStartup<IApplicationService>
 {
-    public AppService_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IApplicationService> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<AppService_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public AppService_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IApplicationService> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<AppService_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class SystemEventStoreIndex_Startup : RabbitMqStartup<ISystemEventStoreIndex>
 {
-    public SystemEventStoreIndex_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemEventStoreIndex> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemEventStoreIndex_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public SystemEventStoreIndex_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemEventStoreIndex> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemEventStoreIndex_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class EventStoreIndex_Startup : RabbitMqStartup<IEventStoreIndex>
 {
-    public EventStoreIndex_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IEventStoreIndex> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<EventStoreIndex_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public EventStoreIndex_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IEventStoreIndex> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<EventStoreIndex_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class Projection_Startup : RabbitMqStartup<IProjection>
 {
-    public Projection_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IProjection> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Projection_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public Projection_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IProjection> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Projection_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class Port_Startup : RabbitMqStartup<IPort>
 {
-    public Port_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IPort> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Port_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public Port_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IPort> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Port_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class Saga_Startup : RabbitMqStartup<ISaga>
 {
-    public Saga_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISaga> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Saga_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public Saga_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISaga> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Saga_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class Gateway_Startup : RabbitMqStartup<IGateway>
 {
-    public Gateway_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IGateway> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Gateway_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public Gateway_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IGateway> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Gateway_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class TriggerPrivate_Startup : RabbitMqStartup<ITrigger>
 {
-    public TriggerPrivate_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ITrigger> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<TriggerPrivate_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public TriggerPrivate_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ITrigger> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<TriggerPrivate_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class SystemAppService_Startup : RabbitMqStartup<ISystemAppService>
 {
-    public SystemAppService_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemAppService> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemAppService_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public SystemAppService_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemAppService> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemAppService_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class SystemSaga_Startup : RabbitMqStartup<ISystemSaga>
 {
-    public SystemSaga_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemSaga> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemSaga_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public SystemSaga_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemSaga> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemSaga_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class SystemPort_Startup : RabbitMqStartup<ISystemPort>
 {
-    public SystemPort_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemPort> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemPort_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public SystemPort_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemPort> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemPort_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class SystemTrigger_Startup : RabbitMqStartup<ISystemTrigger>
 {
-    public SystemTrigger_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemTrigger> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemTrigger_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public SystemTrigger_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemTrigger> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemTrigger_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class SystemProjection_Startup : RabbitMqStartup<ISystemProjection>
 {
-    public SystemProjection_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemProjection> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemProjection_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public SystemProjection_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemProjection> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemProjection_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
 public class MigrationHandler_Startup : RabbitMqStartup<IMigrationHandler>
 {
-    public MigrationHandler_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IMigrationHandler> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<MigrationHandler_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
+    public MigrationHandler_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptions<RabbitMqOptions> rmqOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IMigrationHandler> subscriberCollection, ConnectionResolver connectionResolver, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<MigrationHandler_Startup> logger) : base(consumerOptions, rmqOptions, boundedContext, tenantsOptions, subscriberCollection, connectionResolver, bcRabbitMqNamer, logger) { }
 }
 
