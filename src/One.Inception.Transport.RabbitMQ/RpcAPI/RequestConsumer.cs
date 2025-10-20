@@ -16,15 +16,19 @@ public class RequestConsumer<TRequest, TResponse> : AsyncConsumerBase
     private readonly IServiceProvider serviceProvider;
     private static string _timeout = "30000";
 
-    public RequestConsumer(string queue, IModel model, IRequestResponseFactory factory, ISerializer serializer, IServiceProvider serviceProvider, ILogger logger)
-      : base(model, serializer, logger)
+    public RequestConsumer(string queue, IChannel channel, IRequestResponseFactory factory, ISerializer serializer, IServiceProvider serviceProvider, ILogger logger)
+      : base(channel, serializer, logger)
     {
         this.queue = queue;
         this.factory = factory;
         this.serviceProvider = serviceProvider;
-        model.QueueDeclare(queue, exclusive: false);
-        model.BasicQos(0, 1, false);
-        model.BasicConsume(queue, autoAck: false, this); // We should do manual acknowledgement to spread the load equally over multiple servers
+    }
+
+    public override async Task StartAsync()
+    {
+        await channel.QueueDeclareAsync(queue, exclusive: false).ConfigureAwait(false);
+        await channel.BasicQosAsync(0, 1, false).ConfigureAwait(false);
+        await channel.BasicConsumeAsync(queue, autoAck: false, this).ConfigureAwait(false);
     }
 
     protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
@@ -48,15 +52,15 @@ public class RequestConsumer<TRequest, TResponse> : AsyncConsumerBase
             }
             finally
             {
-                IBasicProperties replyProps = model.CreateBasicProperties();
+                IBasicProperties replyProps = channel.CreateBasicProperties();
                 replyProps.CorrelationId = ev.BasicProperties.CorrelationId; // correlate requests with the responses
                 replyProps.ReplyTo = ev.BasicProperties.ReplyTo;
                 replyProps.Persistent = false;
                 replyProps.Expiration = _timeout;
 
                 byte[] responseBytes = serializer.SerializeToBytes(response);
-                model.BasicPublish("", routingKey: replyProps.ReplyTo, replyProps, responseBytes);
-                model.BasicAck(ev.DeliveryTag, false);
+                channel.BasicPublish("", routingKey: replyProps.ReplyTo, replyProps, responseBytes);
+                channel.BasicAck(ev.DeliveryTag, false);
             }
         }
     }

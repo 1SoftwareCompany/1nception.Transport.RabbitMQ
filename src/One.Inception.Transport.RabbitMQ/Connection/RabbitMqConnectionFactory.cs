@@ -18,12 +18,12 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
         this.logger = logger;
     }
 
-    public IConnection CreateConnection()
+    public Task<IConnection> CreateConnectionAsync()
     {
-        return CreateConnectionWithOptions(options);
+        return CreateConnectionWithOptionsAsync(options);
     }
 
-    public IConnection CreateConnectionWithOptions(IRabbitMqOptions options)
+    public async Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options)
     {
         if (logger.IsEnabled(LogLevel.Debug))
             logger.LogDebug("Loaded RabbitMQ options are {@Options}", options);
@@ -39,12 +39,16 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
                 connectionFactory.UserName = options.Username;
                 connectionFactory.Password = options.Password;
                 connectionFactory.VirtualHost = options.VHost;
-                connectionFactory.DispatchConsumersAsync = true;
                 connectionFactory.AutomaticRecoveryEnabled = true;
                 connectionFactory.Ssl.Enabled = options.UseSsl;
                 connectionFactory.EndpointResolverFactory = (_) => MultipleEndpointResolver.ComposeEndpointResolver(options);
 
-                return connectionFactory.CreateConnection();
+                // Always await within a try/catch to handle possible exceptions
+                IConnection newConnection = await connectionFactory.CreateConnectionAsync();
+                if (logger.IsEnabled(LogLevel.Information))
+                    logger.LogInformation("Successfully created RabbitMQ connection using options {@options}", options);
+
+                return newConnection;
             }
             catch (Exception ex)
             {
@@ -53,10 +57,14 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
                 else
                     logger.LogWarning(ex, "Failed to create RabbitMQ connection using options {@options}. Retrying...", options);
 
-                Task.Delay(5000).GetAwaiter().GetResult();
                 tailRecursion = true;
             }
-        } while (tailRecursion == true);
+
+            if (tailRecursion)
+                await Task.Delay(5000);
+            
+        }
+        while (tailRecursion == true);
 
         return default;
     }

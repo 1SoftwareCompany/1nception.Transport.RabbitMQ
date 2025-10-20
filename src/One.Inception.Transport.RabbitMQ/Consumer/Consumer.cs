@@ -27,7 +27,7 @@ public class Consumer<T> : IConsumer<T> where T : IMessageHandler
         this.logger = logger;
     }
 
-    public Task StartAsync()
+    public async Task StartAsync()
     {
         try
         {
@@ -37,13 +37,11 @@ public class Consumer<T> : IConsumer<T> where T : IMessageHandler
                     logger.LogInformation("Consumer {messageHandler} not started because there are no subscribers.", typeof(T).Name);
             }
 
-            consumerFactory.CreateAndStartConsumers(tokenSource.Token);
+           await consumerFactory.CreateAndStartConsumersAsync(tokenSource.Token).ConfigureAwait(false); ;
 
         }
         catch (Exception ex) when (False(() => logger.LogError(ex, "Failed to start rabbitmq consumer."))) { }
         catch (Exception) { }
-
-        return Task.CompletedTask;
     }
 
     public Task StopAsync()

@@ -11,7 +11,7 @@ namespace One.Inception.Transport.RabbitMQ.RpcAPI;
 
 public interface IRpc
 {
-    internal void StartServer();
+    internal Task StartServerAsync();
 
     internal Task StopConsumersAsync();
 }
@@ -77,15 +77,18 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
         return response;
     }
 
-    void IRpc.StartServer()
+    async Task IRpc.StartServerAsync()
     {
         try
         {
             IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
-            IModel requestChannel = channelResolver.Resolve(route, scopedOptions, options.VHost);
+            IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, options.VHost).ConfigureAwait(false);
 
             for (int workerNumber = 0; workerNumber < consumerOptions.RpcWorkersCount; workerNumber++)
+            {
                 server = new RequestConsumer<TRequest, TResponse>(route, requestChannel, factory, serializer, serviceProvider, logger);
+                await server.StartAsync().ConfigureAwait(false);
+            }
 
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation("{rmqrpcworkerscount} RPC request consumers started for {route}.", consumerOptions.RpcWorkersCount, route);

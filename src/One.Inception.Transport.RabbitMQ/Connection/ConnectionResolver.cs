@@ -1,14 +1,18 @@
-﻿using System;
+﻿using RabbitMQ.Client;
+using System;
 using System.Collections.Concurrent;
-using RabbitMQ.Client;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ;
 
 public class ConnectionResolver : IDisposable
 {
+    private static SemaphoreSlim connectionThreadGate = new SemaphoreSlim(1); // Instantiate a Singleton of the Semaphore with a value of 1. This means that only 1 thread can be granted access at a time
+
     private readonly ConcurrentDictionary<string, IConnection> connectionsPerVHost;
     private readonly IRabbitMqConnectionFactory connectionFactory;
-    private static readonly object connectionLock = new object();
+    protected static readonly System.Threading.Lock connectionLock = new();
 
     public ConnectionResolver(IRabbitMqConnectionFactory connectionFactory)
     {
@@ -16,20 +20,21 @@ public class ConnectionResolver : IDisposable
         this.connectionFactory = connectionFactory;
     }
 
-    public IConnection Resolve(string key, IRabbitMqOptions options)
+    public async Task<IConnection> ResolveAsync(string key, IRabbitMqOptions options)
     {
         IConnection connection = GetExistingConnection(key);
 
         if (connection is null || connection.IsOpen == false)
         {
-            lock (connectionLock)
+            await connectionThreadGate.WaitAsync(1000);
+            
+            connection = GetExistingConnection(key);
+            if (connection is null || connection.IsOpen == false)
             {
-                connection = GetExistingConnection(key);
-                if (connection is null || connection.IsOpen == false)
-                {
-                    connection = CreateConnection(key, options);
-                }
+                connection = await CreateConnectionAsync(key, options).ConfigureAwait(true);
             }
+
+            connectionThreadGate.Release();
         }
 
         return connection;
@@ -42,9 +47,9 @@ public class ConnectionResolver : IDisposable
         return connection;
     }
 
-    private IConnection CreateConnection(string key, IRabbitMqOptions options)
+    private async Task<IConnection> CreateConnectionAsync(string key, IRabbitMqOptions options)
     {
-        IConnection connection = connectionFactory.CreateConnectionWithOptions(options);
+        IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options).ConfigureAwait(false);
 
         if (connectionsPerVHost.TryGetValue(key, out _))
         {
@@ -63,7 +68,7 @@ public class ConnectionResolver : IDisposable
     {
         foreach (var connection in connectionsPerVHost)
         {
-            connection.Value.Close(TimeSpan.FromSeconds(5));
+            connection.Value.CloseAsync(TimeSpan.FromSeconds(5));
         }
     }
 }

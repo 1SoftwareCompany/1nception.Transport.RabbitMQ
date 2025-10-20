@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
@@ -42,7 +43,7 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
     //    return publishResult;
     //}
 
-    protected override PublishResult PublishInternal(InceptionMessage message)
+    protected override async Task<PublishResult> PublishInternalAsync(InceptionMessage message)
     {
         PublishResult publishResult = PublishResult.Initial;
 
@@ -56,7 +57,8 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         {
             foreach (string exchange in exchanges)
             {
-                publishResult &= Publish(message, boundedContext, exchange, scopedOpt);
+                PublishResult resultNow = await PublishAsync(message, boundedContext, exchange, scopedOpt).ConfigureAwait(false);
+                publishResult &= resultNow;
             }
         }
 
@@ -65,18 +67,20 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
 
     protected abstract IEnumerable<IRabbitMqOptions> GetOptionsFor(InceptionMessage message);
 
-    private PublishResult Publish(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions options)
+    private async Task<PublishResult> PublishAsync(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions options)
     {
         try
         {
-            IModel exchangeModel = channelResolver.Resolve(exchange, options, boundedContext);
-            IBasicProperties props = exchangeModel.CreateBasicProperties();
+            IChannel exchangeChannel = await channelResolver.ResolveAsync(exchange, options, boundedContext).ConfigureAwait(false);
+            BasicProperties props = new BasicProperties();
             props = BuildMessageProperties(props, message);
             props = AttachHeaders(props, message);
 
             byte[] body = serializer.SerializeToBytes(message);
-            exchangeModel.BasicPublish(exchange, string.Empty, false, props, body);
-            logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
+            await exchangeChannel.BasicPublishAsync(exchange, string.Empty, false, props, body).ConfigureAwait(false);
+
+            if(logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
 
             return new PublishResult(true, true);
         }
@@ -88,7 +92,7 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         }
     }
 
-    protected virtual IBasicProperties BuildMessageProperties(IBasicProperties properties, InceptionMessage message)
+    protected virtual BasicProperties BuildMessageProperties(BasicProperties properties, InceptionMessage message)
     {
         properties.Headers = new Dictionary<string, object>();
         properties.Headers.Add("messageid", message.Id.ToByteArray());
@@ -100,7 +104,7 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         return properties;
     }
 
-    protected virtual IBasicProperties AttachHeaders(IBasicProperties properties, InceptionMessage message)
+    protected virtual BasicProperties AttachHeaders(BasicProperties properties, InceptionMessage message)
     {
         string boundedContext = message.BoundedContext;
 

@@ -13,36 +13,37 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
 {
     protected readonly ILogger logger;
     protected readonly ISerializer serializer;
-    protected readonly IModel model;
+    protected readonly IChannel channel;
     private bool isСurrentlyConsuming;
 
-    public AsyncConsumerBase(IModel model, ISerializer serializer, ILogger logger) : base(model)
+    public AsyncConsumerBase(IChannel channel, ISerializer serializer, ILogger logger) : base(channel)
     {
-        this.model = model;
+        this.channel = channel;
         this.serializer = serializer;
         this.logger = logger;
         isСurrentlyConsuming = false;
-        Received += AsyncListener_Received;
+        ReceivedAsync += AsyncListener_Received;
     }
 
     protected abstract Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer);
 
+    public abstract Task StartAsync();
+
     public async Task StopAsync()
     {
         // 1. We detach the listener so ther will be no new messages coming from the queue
-        Received -= AsyncListener_Received;
+        ReceivedAsync -= AsyncListener_Received;
 
         // 2. Wait to handle any messages in progress
         while (isСurrentlyConsuming)
         {
             // We are trying to wait all consumers to finish their current work.
             // Ofcourse the host could be forcibly shut down but we are doing our best.
-
             await Task.Delay(10).ConfigureAwait(false);
         }
 
-        if (model.IsOpen)
-            model.Abort();
+        if (channel.IsOpen)
+            await channel.AbortAsync();
     }
 
     private async Task AsyncListener_Received(object sender, BasicDeliverEventArgs @event)
@@ -77,11 +78,11 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
     }
 }
 
-public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
+public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
 {
     private readonly ISubscriberCollection<TSubscriber> subscriberCollection;
 
-    public AsyncConsumerBase(IModel model, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger) : base(model, serializer, logger)
+    public AsyncConsumerBase(IChannel channel, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger) : base(channel, serializer, logger)
     {
         this.subscriberCollection = subscriberCollection;
     }
@@ -112,7 +113,8 @@ public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
             // TODO: send to dead letter exchange/queue
             // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
             logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
-            Ack(ev, consumer);
+            await AckAsync(ev, consumer).ConfigureAwait(false);
+
             return;
         }
 
@@ -144,14 +146,14 @@ public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
         { }
         finally
         {
-            Ack(ev, consumer);
+            await AckAsync(ev, consumer).ConfigureAwait(false);
         }
 
-        static void Ack(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
+        async Task AckAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
         {
-            if (consumer.Model.IsOpen)
+            if (consumer.Channel.IsOpen)
             {
-                consumer.Model.BasicAck(ev.DeliveryTag, false);
+                await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
             }
         }
     }

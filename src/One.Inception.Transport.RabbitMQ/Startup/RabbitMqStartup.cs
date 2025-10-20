@@ -8,6 +8,7 @@ using One.Inception.Multitenancy;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Startup;
 
@@ -119,7 +120,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         return routingHeaders;
     }
 
-    private void RecoverModel(IModel model)
+    private async Task RecoverModel(IChannel channel)
     {
         var messageTypes = subscriberCollection.Subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
 
@@ -131,14 +132,14 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
         foreach (var publishExchangeGroup in publishToExchangeGroups)
         {
-            model.ExchangeDeclare(publishExchangeGroup.Key, PipelineType.Headers.ToString(), true);
+            await channel.ExchangeDeclareAsync(publishExchangeGroup.Key, PipelineType.Headers.ToString(), true).ConfigureAwait(false);
         }
 
 
         Dictionary<string, Dictionary<string, List<string>>> event2Handler = BuildEventToHandler();
 
         Dictionary<string, object> routingHeaders = BuildQueueRoutingHeaders();
-        model.QueueDeclare(queueName, true, false, false, null);
+        await channel.QueueDeclareAsync(queueName, true, false, false, null).ConfigureAwait(false);
 
         var bindToExchangeGroups = messageTypes
             .SelectMany(mt => bcRabbitMqNamer.Get_BindTo_ExchangeNames(mt).Select(x => new { Exchange = x, MessageType = mt }))
@@ -163,7 +164,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
                 };
 
                 scheduledQueue = $"{queueName}.Scheduled";
-                model.QueueDeclare(scheduledQueue, true, false, false, arguments);
+                await channel.QueueDeclareAsync(scheduledQueue, true, false, false, arguments).ConfigureAwait(false);
 
                 thereIsAScheduledQueue = true;
             }
@@ -178,7 +179,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         {
             // Standard exchange
             string standardExchangeName = exchangeGroup.Key;
-            model.ExchangeDeclare(standardExchangeName, PipelineType.Headers.ToString(), true, false, null);
+            channel.ExchangeDeclare(standardExchangeName, PipelineType.Headers.ToString(), true, false, null);
 
             var bindHeaders = new Dictionary<string, object>();
 
@@ -219,7 +220,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
             foreach (var header in bindHeaders)
             {
-                model.QueueBind(queueName, standardExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } });
+                channel.QueueBind(queueName, standardExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } });
             }
 
             if (thereIsAScheduledQueue)
@@ -227,8 +228,8 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
                 foreach (var header in bindHeaders)
                 {
                     string deadLetterExchangeName = $"{standardExchangeName}.Delayer";
-                    model.ExchangeDeclare(deadLetterExchangeName, ExchangeType.Headers, true, false);
-                    model.QueueBind(scheduledQueue, deadLetterExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } });
+                    channel.ExchangeDeclare(deadLetterExchangeName, ExchangeType.Headers, true, false);
+                    channel.QueueBind(scheduledQueue, deadLetterExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } });
                 }
             }
         }

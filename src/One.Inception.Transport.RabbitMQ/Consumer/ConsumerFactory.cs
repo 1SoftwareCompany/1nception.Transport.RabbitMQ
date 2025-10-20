@@ -43,47 +43,49 @@ public class ConsumerFactory<T>
         queueName = GetQueueName(this.boundedContext.Name, this.consumerOptions.FanoutMode);
     }
 
-    public void CreateAndStartConsumers(CancellationToken cancellationToken)
+    public async Task CreateAndStartConsumersAsync(CancellationToken cancellationToken)
     {
         bool isTrigger = typeof(T).IsAssignableFrom(typeof(ITrigger));
 
         if (isTrigger)
-            CreateAndStartTriggerConsumers();
+            await CreateAndStartTriggerConsumersAsync().ConfigureAwait(false);
         else
-            CreateAndStartNormalConsumers();
+            await CreateAndStartNormalConsumersAsync().ConfigureAwait(false);
 
-        CreateAndStartSchedulePoker(cancellationToken);
+        await CreateAndStartSchedulePokerAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private void CreateAndStartTriggerConsumers()
+    private async Task CreateAndStartTriggerConsumersAsync()
     {
         IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
 
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
-            IModel channel = channelResolver.Resolve(consumerChannelKey, scopedOptions, options.VHost);
+            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
 
             AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
-
             consumers.Add(asyncListener);
+
+            await asyncListener.StartAsync();
         }
     }
 
-    private void CreateAndStartNormalConsumers()
+    private async Task CreateAndStartNormalConsumersAsync()
     {
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
-            IModel channel = channelResolver.Resolve(consumerChannelKey, options, options.VHost);
+            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
 
             AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
-
             consumers.Add(asyncListener);
+
+            await asyncListener.StartAsync();
         }
     }
 
-    private void CreateAndStartSchedulePoker(CancellationToken cancellationToken)
+    private async Task CreateAndStartSchedulePokerAsync(CancellationToken cancellationToken)
     {
         bool isSaga = typeof(ISaga).IsAssignableFrom(typeof(T));
         if (isSaga)
@@ -92,7 +94,7 @@ public class ConsumerFactory<T>
             bool hasRegisteredSagas = allSagas.Items.Where(saga => typeof(ISystemSaga).IsAssignableFrom(saga) == isSystemSaga).Any();
             if (hasRegisteredSagas)
             {
-                schedulePoker.PokeAsync(cancellationToken);
+                await schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -103,7 +105,7 @@ public class ConsumerFactory<T>
             var allNormalTriggers = allTriggers.Items.Where(justTrigger => typeof(ISystemHandler).IsAssignableFrom(justTrigger) == false);
             if (allNormalTriggers.Any())
             {
-                schedulePoker.PokeAsync(cancellationToken);
+                await schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);
             }
         }
     }

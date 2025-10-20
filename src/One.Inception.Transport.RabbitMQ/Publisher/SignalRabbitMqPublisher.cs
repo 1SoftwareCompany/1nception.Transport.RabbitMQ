@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
@@ -76,15 +77,16 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         return PublishUsingChannel(message, exchange, exchangeModel, props);
     }
 
-    private PublishResult PublishPublically(InceptionMessage message, string boundedContext, string exchange, IEnumerable<IRabbitMqOptions> scopedOptions)
+    private async Task<PublishResult> PublishPublicallyAsync(InceptionMessage message, string boundedContext, string exchange, IEnumerable<IRabbitMqOptions> scopedOptions)
     {
         PublishResult publishResult = PublishResult.Initial;
 
         foreach (var opt in scopedOptions)
         {
-            IModel exchangeModel = channelResolver.Resolve(exchange, opt, boundedContext);
+            IChannel exchangeModel = await channelResolver.ResolveAsync(exchange, opt, boundedContext).ConfigureAwait(false);
 
-            IBasicProperties props = exchangeModel.CreateBasicProperties();
+            //IBasicProperties props = exchangeModel.CreateBasicProperties();
+            BasicProperties props = new BasicProperties();
             props = BuildMessageProperties(props, message);
             props = BuildPublicHeaders(props, message);
 
@@ -94,12 +96,12 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         return publishResult;
     }
 
-    private PublishResult PublishUsingChannel(InceptionMessage message, string exchange, IModel exchangeModel, IBasicProperties properties)
+    private async Task<PublishResult> PublishUsingChannelAsync(InceptionMessage message, string exchange, IChannel exchangeModel, IBasicProperties properties)
     {
         try
         {
             byte[] body = serializer.SerializeToBytes(message);
-            exchangeModel.BasicPublish(exchange, string.Empty, false, properties, body);
+            exchangeModel.BasicPublishAsync(exchange, string.Empty, false, properties, body);
 
             logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, properties.Headers);
 
@@ -113,7 +115,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         }
     }
 
-    private IBasicProperties BuildMessageProperties(IBasicProperties properties, InceptionMessage message)
+    private BasicProperties BuildMessageProperties(BasicProperties properties, InceptionMessage message)
     {
         string ttl = message.GetTtlMilliseconds();
         if (string.IsNullOrEmpty(ttl) == false)
@@ -124,7 +126,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         return properties;
     }
 
-    private IBasicProperties BuildPublicHeaders(IBasicProperties properties, InceptionMessage message)
+    private BasicProperties BuildPublicHeaders(BasicProperties properties, InceptionMessage message)
     {
         string contractId = message.GetMessageType().GetContractId();
         string boundedContext = message.BoundedContext;
@@ -137,7 +139,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         return properties;
     }
 
-    private IBasicProperties BuildInternalHeaders(IBasicProperties properties, InceptionMessage message)
+    private IBasicProperties BuildInternalHeaders(BasicProperties properties, InceptionMessage message)
     {
         string contractId = message.GetMessageType().GetContractId();
         string boundedContext = message.BoundedContext;

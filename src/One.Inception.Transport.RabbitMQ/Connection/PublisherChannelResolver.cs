@@ -1,62 +1,69 @@
 ﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ;
 
 public class PublisherChannelResolver : ChannelResolverBase // channels per exchange
 {
+    private static SemaphoreSlim channelThreadGate = new SemaphoreSlim(1); // Instantiate a Singleton of the Semaphore with a value of 1. This means that only 1 thread can be granted access at a time
+
+
     public PublisherChannelResolver(ConnectionResolver connectionResolver) : base(connectionResolver) { }
 
-    public override IModel Resolve(string exchange, IRabbitMqOptions options, string boundedContext)
+    public override async Task<IChannel> ResolveAsync(string exchange, IRabbitMqOptions options, string boundedContext)
     {
         string channelKey = $"{boundedContext}_{options.GetType().Name}_{exchange}_{options.Server}".ToLower();
         string connectionKey = $"{options.VHost}_{options.Server}".ToLower();
 
-        IModel channel = GetExistingChannel(channelKey);
+        IChannel channel = GetExistingChannel(channelKey);
 
         if (channel is null || channel.IsClosed)
         {
-            lock (@lock)
+            await channelThreadGate.WaitAsync(1000).ConfigureAwait(false);
+
+            channel = GetExistingChannel(channelKey);
+
+            if (channel?.IsClosed == true)
             {
-                channel = GetExistingChannel(channelKey);
-
-                if (channel?.IsClosed == true)
-                {
-                    channels.Remove(channelKey);
-                    channel = null;
-                }
-
-                if (channel is null)
-                {
-                    var connection = connectionResolver.Resolve(connectionKey, options);
-                    IModel scopedChannel = CreateModelForPublisher(connection);
-                    try
-                    {
-                        if (string.IsNullOrEmpty(exchange) == false)
-                        {
-                            scopedChannel.ExchangeDeclarePassive(exchange);
-                        }
-                    }
-                    catch (OperationInterruptedException)
-                    {
-                        scopedChannel.Dispose();
-                        scopedChannel = CreateModelForPublisher(connection);
-                        scopedChannel.ExchangeDeclare(exchange, PipelineType.Headers.ToString(), true);
-                    }
-
-                    channels.Add(channelKey, scopedChannel);
-                }
+                channels.Remove(channelKey);
+                channel = null;
             }
+
+            if (channel is null)
+            {
+                IConnection connection = await connectionResolver.ResolveAsync(connectionKey, options).ConfigureAwait(false);
+                IChannel scopedChannel = await CreateModelForPublisherAsync(connection).ConfigureAwait(false);
+                try
+                {
+                    if (string.IsNullOrEmpty(exchange) == false)
+                    {
+                        await scopedChannel.ExchangeDeclarePassiveAsync(exchange).ConfigureAwait(true);
+                    }
+                }
+                catch (OperationInterruptedException)
+                {
+                    throw;
+                    // I have no idea why this code was here.
+                    //scopedChannel.Dispose();
+                    //scopedChannel = CreateModelForPublisher(connection);
+                    //scopedChannel.ExchangeDeclare(exchange, PipelineType.Headers.ToString(), true);
+                }
+
+                channels.Add(channelKey, scopedChannel);
+            }
+
+            channelThreadGate.Release();
         }
 
         return GetExistingChannel(channelKey);
     }
 
-    private IModel CreateModelForPublisher(IConnection connection)
+    private Task<IChannel> CreateModelForPublisherAsync(IConnection connection)
     {
-        IModel channel = connection.CreateModel();
-        channel.ConfirmSelect();
+        var channelOpts = new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
 
-        return channel;
+        return connection.CreateChannelAsync(channelOpts);
     }
 }
