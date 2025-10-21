@@ -36,27 +36,27 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         isSystemQueue = typeof(ISystemHandler).IsAssignableFrom(typeof(T));
         queueName = bcRabbitMqNamer.Get_QueueName(typeof(T), consumerOptions.CurrentValue.FanoutMode);
 
-        tenantsOptionsMonitor.OnChange(newOptions =>
+        tenantsOptionsMonitor.OnChange(async newOptions =>
         {
             if (logger.IsEnabled(LogLevel.Debug))
                 this.logger.LogDebug("Tenant options re-loaded with {@options}", newOptions);
 
             tenantsOptions = newOptions;
 
-            using (var connection = connectionFactory.CreateConnection())
-            using (var channel = connection.CreateModel())
+            using (IConnection connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
+            using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
             {
-                RecoverModel(channel);
+                await RecoverModelAsync(channel).ConfigureAwait(false);
             }
         });
     }
 
-    public void Bootstrap()
+    public async Task BootstrapAsync()
     {
-        using (var connection = connectionFactory.CreateConnection())
-        using (var channel = connection.CreateModel())
+        using (var connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
+        using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
         {
-            RecoverModel(channel);
+            await RecoverModelAsync(channel).ConfigureAwait(false);
         }
     }
 
@@ -120,7 +120,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         return routingHeaders;
     }
 
-    private async Task RecoverModel(IChannel channel)
+    private async Task RecoverModelAsync(IChannel channel)
     {
         var messageTypes = subscriberCollection.Subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
 
@@ -179,7 +179,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         {
             // Standard exchange
             string standardExchangeName = exchangeGroup.Key;
-            channel.ExchangeDeclare(standardExchangeName, PipelineType.Headers.ToString(), true, false, null);
+            await channel.ExchangeDeclareAsync(standardExchangeName, PipelineType.Headers.ToString(), true, false, null).ConfigureAwait(false);
 
             var bindHeaders = new Dictionary<string, object>();
 
@@ -220,7 +220,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
             foreach (var header in bindHeaders)
             {
-                channel.QueueBind(queueName, standardExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } });
+                await channel.QueueBindAsync(queueName, standardExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } }).ConfigureAwait(false);
             }
 
             if (thereIsAScheduledQueue)
@@ -228,8 +228,8 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
                 foreach (var header in bindHeaders)
                 {
                     string deadLetterExchangeName = $"{standardExchangeName}.Delayer";
-                    channel.ExchangeDeclare(deadLetterExchangeName, ExchangeType.Headers, true, false);
-                    channel.QueueBind(scheduledQueue, deadLetterExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } });
+                    await channel.ExchangeDeclareAsync(deadLetterExchangeName, ExchangeType.Headers, true, false).ConfigureAwait(false);
+                    await channel.QueueBindAsync(scheduledQueue, deadLetterExchangeName, string.Empty, new Dictionary<string, object> { { header.Key, header.Value } }).ConfigureAwait(false);
                 }
             }
         }

@@ -30,7 +30,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         this.logger = logger;
     }
 
-    protected override PublishResult PublishInternal(InceptionMessage message)
+    protected override async Task<PublishResult> PublishInternalAsync(InceptionMessage message)
     {
         PublishResult publishResult = PublishResult.Initial;
 
@@ -47,14 +47,14 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
             {
                 foreach (var exchange in exchanges)
                 {
-                    publishResult &= PublishInternally(message, messageBC, exchange, internalOptions);
+                    publishResult &= await PublishInternallyAsync(message, messageBC, exchange, internalOptions).ConfigureAwait(false);
                 }
             }
             else
             {
                 foreach (var exchange in exchanges)
                 {
-                    publishResult &= PublishPublically(message, messageBC, exchange, options.PublicClustersOptions);
+                    publishResult &= await PublishPublicallyAsync(message, messageBC, exchange, options.PublicClustersOptions).ConfigureAwait(false);
                 }
             }
 
@@ -66,15 +66,15 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         }
     }
 
-    private PublishResult PublishInternally(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions internalOptions)
+    private async Task<PublishResult> PublishInternallyAsync(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions internalOptions)
     {
-        IModel exchangeModel = channelResolver.Resolve(exchange, internalOptions, boundedContext);
+        IChannel exchangeModel = await channelResolver.ResolveAsync(exchange, internalOptions, boundedContext).ConfigureAwait(false);
 
-        IBasicProperties props = exchangeModel.CreateBasicProperties();
+        BasicProperties props = new BasicProperties();
         props = BuildMessageProperties(props, message);
         props = BuildInternalHeaders(props, message);
 
-        return PublishUsingChannel(message, exchange, exchangeModel, props);
+        return await PublishUsingChannelAsync(message, exchange, exchangeModel, props).ConfigureAwait(false);
     }
 
     private async Task<PublishResult> PublishPublicallyAsync(InceptionMessage message, string boundedContext, string exchange, IEnumerable<IRabbitMqOptions> scopedOptions)
@@ -90,18 +90,18 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
             props = BuildMessageProperties(props, message);
             props = BuildPublicHeaders(props, message);
 
-            publishResult &= PublishUsingChannel(message, exchange, exchangeModel, props);
+            publishResult &= await PublishUsingChannelAsync(message, exchange, exchangeModel, props).ConfigureAwait(false);
         }
 
         return publishResult;
     }
 
-    private async Task<PublishResult> PublishUsingChannelAsync(InceptionMessage message, string exchange, IChannel exchangeModel, IBasicProperties properties)
+    private async Task<PublishResult> PublishUsingChannelAsync(InceptionMessage message, string exchange, IChannel exchangeModel, BasicProperties properties)
     {
         try
         {
             byte[] body = serializer.SerializeToBytes(message);
-            exchangeModel.BasicPublishAsync(exchange, string.Empty, false, properties, body);
+            await exchangeModel.BasicPublishAsync(exchange, string.Empty, false, properties, body).ConfigureAwait(false);
 
             logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, properties.Headers);
 
@@ -121,7 +121,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         if (string.IsNullOrEmpty(ttl) == false)
             properties.Expiration = ttl;
         properties.Persistent = false;
-        properties.DeliveryMode = 1;
+        properties.DeliveryMode = DeliveryModes.Transient;
 
         return properties;
     }
@@ -139,7 +139,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         return properties;
     }
 
-    private IBasicProperties BuildInternalHeaders(BasicProperties properties, InceptionMessage message)
+    private BasicProperties BuildInternalHeaders(BasicProperties properties, InceptionMessage message)
     {
         string contractId = message.GetMessageType().GetContractId();
         string boundedContext = message.BoundedContext;

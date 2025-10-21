@@ -52,15 +52,15 @@ public class RequestConsumer<TRequest, TResponse> : AsyncConsumerBase
             }
             finally
             {
-                IBasicProperties replyProps = channel.CreateBasicProperties();
+                BasicProperties replyProps = new BasicProperties();
                 replyProps.CorrelationId = ev.BasicProperties.CorrelationId; // correlate requests with the responses
                 replyProps.ReplyTo = ev.BasicProperties.ReplyTo;
                 replyProps.Persistent = false;
                 replyProps.Expiration = _timeout;
 
                 byte[] responseBytes = serializer.SerializeToBytes(response);
-                channel.BasicPublish("", routingKey: replyProps.ReplyTo, replyProps, responseBytes);
-                channel.BasicAck(ev.DeliveryTag, false);
+                await channel.BasicPublishAsync("", routingKey: replyProps.ReplyTo, false, replyProps, responseBytes).ConfigureAwait(false);
+                await channel.BasicAckAsync(ev.DeliveryTag, false).ConfigureAwait(false);
             }
         }
     }

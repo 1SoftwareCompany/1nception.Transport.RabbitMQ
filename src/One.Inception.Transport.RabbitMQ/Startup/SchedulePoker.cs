@@ -29,20 +29,20 @@ public class SchedulePoker<T> //where T : IMessageHandler
 
             while (cancellationToken.IsCancellationRequested == false)
             {
-                IConnection connection = connectionResolver.Resolve(queueName, rmqOptionsMonitor.CurrentValue);
+                IConnection connection = await connectionResolver.ResolveAsync(queueName, rmqOptionsMonitor.CurrentValue).ConfigureAwait(false);
 
-                using (IModel channel = connection.CreateModel())
+                using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
                 {
                     try
                     {
                         consumer = new AsyncEventingBasicConsumer(channel);
-                        consumer.Received += AsyncListener_Received;
+                        consumer.ReceivedAsync += AsyncListener_Received;
 
-                        string consumerTag = channel.BasicConsume(queue: queueName, autoAck: false, consumer: consumer);
+                        string consumerTag = await channel.BasicConsumeAsync(queue: queueName, autoAck: false, consumer: consumer).ConfigureAwait(false);
 
                         await Task.Delay(30000, cancellationToken).ConfigureAwait(false);
 
-                        consumer.Received -= AsyncListener_Received;
+                        consumer.ReceivedAsync -= AsyncListener_Received;
                     }
                     catch (Exception)
                     {

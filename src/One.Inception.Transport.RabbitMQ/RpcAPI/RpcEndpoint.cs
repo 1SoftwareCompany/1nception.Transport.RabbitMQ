@@ -126,7 +126,7 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
                     if (cfgFound.HasValue && cfgFound.Value)
                     {
                         IRabbitMqOptions scopedOptions = options.GetOptionsFor(destinationBC);
-                        IModel requestChannel = channelResolver.Resolve(route, scopedOptions, destinationBC);
+                        IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, destinationBC).ConfigureAwait(false);
                         client = new ResponseConsumer<TRequest, TResponse>(route, requestChannel, serializer, logger);
                         isClientCreated = true;
                     }

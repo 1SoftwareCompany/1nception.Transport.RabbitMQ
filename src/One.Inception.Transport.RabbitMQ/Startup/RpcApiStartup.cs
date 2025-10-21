@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Microsoft.Extensions.Options;
 using One.Inception.Transport.RabbitMQ.RpcAPI;
 using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Startup;
 
@@ -29,16 +30,18 @@ public class RpcApiStartup : IInceptionStartup
         });
     }
 
-    public void Bootstrap()
+    public Task BootstrapAsync()
     {
         if (hostOptions.RpcApiEnabled)
         {
             ILookup<Type, Type> handlers = GetHandlers();
             requestFactory.RegisterHandlers(handlers);
-            return;
+
+            return Task.CompletedTask;
         }
 
         logger.LogInformation("Rpc API feature disabled.");
+        return Task.CompletedTask;
     }
 
     private static ILookup<Type, Type> GetHandlers()

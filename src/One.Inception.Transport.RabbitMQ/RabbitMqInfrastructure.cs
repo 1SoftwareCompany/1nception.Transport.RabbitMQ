@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ;
 
@@ -24,7 +25,7 @@ public class RabbitMqInfrastructure
         this.rabbitMqNamer = rabbitMqNamer;
     }
 
-    public void Initialize()
+    public Task InitializeAsync()
     {
         try
         {
@@ -44,6 +45,8 @@ public class RabbitMqInfrastructure
                 CreatePublishedLanguageConnection(priv, publicSettings);
         }
         catch (Exception ex) when (True(() => logger.LogError(ex, ex.Message))) { }
+
+        return Task.CompletedTask;
     }
 
     private bool ChecksIfHavePublishedLanguageConfigurations()

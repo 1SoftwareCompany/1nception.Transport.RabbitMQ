@@ -28,7 +28,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="1nception" Version="12.0.0" />
+    <PackageReference Include="1nception" Version="13.0.0-preview.2" />
     <PackageReference Include="RabbitMQ.Client" Version="7.1.2" />
   </ItemGroup>
 
