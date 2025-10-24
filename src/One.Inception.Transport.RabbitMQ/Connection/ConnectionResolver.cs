@@ -26,8 +26,8 @@ public class ConnectionResolver : IDisposable
 
         if (connection is null || connection.IsOpen == false)
         {
-            await connectionThreadGate.WaitAsync(1000);
-            
+            await connectionThreadGate.WaitAsync(5000);
+
             connection = GetExistingConnection(key);
             if (connection is null || connection.IsOpen == false)
             {

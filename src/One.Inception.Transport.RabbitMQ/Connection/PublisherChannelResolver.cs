@@ -21,7 +21,7 @@ public class PublisherChannelResolver : ChannelResolverBase // channels per exch
 
         if (channel is null || channel.IsClosed)
         {
-            await channelThreadGate.WaitAsync(1000).ConfigureAwait(false);
+            await channelThreadGate.WaitAsync(10000).ConfigureAwait(false);
 
             channel = GetExistingChannel(channelKey);
 
