@@ -95,6 +95,7 @@ public class ConsumerFactory<T>
             bool hasRegisteredSagas = allSagas.Items.Where(saga => typeof(ISystemSaga).IsAssignableFrom(saga) == isSystemSaga).Any();
             if (hasRegisteredSagas)
             {
+                //This should not be awaited here to avoid deadlocks
                 schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);
             }
         }
@@ -106,6 +107,7 @@ public class ConsumerFactory<T>
             var allNormalTriggers = allTriggers.Items.Where(justTrigger => typeof(ISystemHandler).IsAssignableFrom(justTrigger) == false);
             if (allNormalTriggers.Any())
             {
+                //This should not be awaited here to avoid deadlocks
                 schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);
             }
         }

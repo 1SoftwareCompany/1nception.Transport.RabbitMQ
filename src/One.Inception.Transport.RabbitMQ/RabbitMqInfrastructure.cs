@@ -25,28 +25,26 @@ public class RabbitMqInfrastructure
         this.rabbitMqNamer = rabbitMqNamer;
     }
 
-    public Task InitializeAsync()
+    public async Task InitializeAsync()
     {
         try
         {
             RabbitMqManagementClient priv = new RabbitMqManagementClient(options);
-            CreateVHost(priv, options);
+            await CreateVHostAsync(priv, options).ConfigureAwait(false);
 
             foreach (var opt in publicRmqOptions.PublicClustersOptions)
             {
                 RabbitMqManagementClient pub = new RabbitMqManagementClient(opt);
-                CreateVHost(pub, opt);
+                await CreateVHostAsync(pub, opt).ConfigureAwait(false);
             }
 
             if (ChecksIfHavePublishedLanguageConfigurations() == false)
                 logger.LogWarning("Missing configurations for public rabbitMq.");
 
             foreach (PublicRabbitMqOptions publicSettings in publicRmqOptions.PublicClustersOptions)
-                CreatePublishedLanguageConnection(priv, publicSettings);
+                await CreatePublishedLanguageConnection(priv, publicSettings).ConfigureAwait(false);
         }
         catch (Exception ex) when (True(() => logger.LogError(ex, ex.Message))) { }
-
-        return Task.CompletedTask;
     }
 
     private bool ChecksIfHavePublishedLanguageConfigurations()
@@ -55,18 +53,20 @@ public class RabbitMqInfrastructure
         return publicRmqOptions.PublicClustersOptions.Any();
     }
 
-    private void CreateVHost(RabbitMqManagementClient client, IRabbitMqOptions options)
+    private async Task CreateVHostAsync(RabbitMqManagementClient client, IRabbitMqOptions options)
     {
-        if (!client.GetVHosts().Any(vh => vh.Name == options.VHost))
+        var vhosts = await client.GetVHostsAsync().ConfigureAwait(false);
+        if (!vhosts.Any(vh => vh.Name == options.VHost))
         {
-            var vhost = client.CreateVirtualHost(options.VHost);
-            var rabbitMqUser = client.GetUsers().SingleOrDefault(x => x.Name == options.Username);
+            var vhost = await client.CreateVirtualHostAsync(options.VHost).ConfigureAwait(false);
+            var rabbitMqUsers = await client.GetUsersAsync().ConfigureAwait(false);
+            var rabbitMqUser = rabbitMqUsers.SingleOrDefault(x => x.Name == options.Username);
             var permissionInfo = new PermissionInfo(rabbitMqUser, vhost);
-            client.CreatePermission(permissionInfo);
+            await client.CreatePermissionAsync(permissionInfo).ConfigureAwait(false);
         }
     }
 
-    private void CreatePublishedLanguageConnection(RabbitMqManagementClient downstreamClient, PublicRabbitMqOptions publicSettings)
+    private async Task CreatePublishedLanguageConnection(RabbitMqManagementClient downstreamClient, PublicRabbitMqOptions publicSettings)
     {
         var upstreams = publicSettings.GetUpstreamUris();
         if (upstreams.Any() == false)
@@ -90,7 +90,7 @@ public class RabbitMqInfrastructure
                         MaxHops = publicSettings.FederatedExchange.MaxHops
                     }
                 };
-                downstreamClient.CreateFederatedExchange(federatedExchange, options.VHost);
+                await downstreamClient.CreateFederatedExchangeAsync(federatedExchange, options.VHost).ConfigureAwait(false);
             }
         }
 
@@ -107,7 +107,7 @@ public class RabbitMqInfrastructure
                     FederationUpstream = publicSettings.VHost + $"--{exchange.ToLower()}"
                 }
             };
-            downstreamClient.CreatePolicy(policy, options.VHost);
+            await downstreamClient.CreatePolicyAsync(policy, options.VHost).ConfigureAwait(false);
         }
     }
 }

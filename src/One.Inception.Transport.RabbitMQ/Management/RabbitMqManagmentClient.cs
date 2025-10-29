@@ -1,17 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Net;
-using System.Reflection;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using One.Inception.Transport.RabbitMQ.Management.Model;
 
 namespace One.Inception.Transport.RabbitMQ.Management;
 
-public sealed class RabbitMqManagementClient
+public sealed class RabbitMqManagementClient : IDisposable
 {
     private static readonly Regex UrlRegex = new Regex(@"^(http|https):\/\/.+\w$");
 
@@ -23,18 +23,16 @@ public sealed class RabbitMqManagementClient
     readonly int sslDisabledPort = 15672;
     readonly JsonSerializerOptions settings;
 
-    readonly bool runningOnMono;
-
-    readonly Action<HttpWebRequest> configureRequest;
     readonly TimeSpan defaultTimeout = TimeSpan.FromSeconds(20);
     readonly TimeSpan timeout;
 
     private readonly List<string> apiAddressCollection;
     private string lastKnownApiAddress;
+    private readonly HttpClient httpClient;
 
     public RabbitMqManagementClient(IRabbitMqOptions settings) : this(settings.ApiAddress ?? settings.Server, settings.Username, settings.Password, useSsl: settings.UseSsl) { }
 
-    public RabbitMqManagementClient(string apiAddresses, string username, string password, bool useSsl = false, TimeSpan? timeout = null, Action<HttpWebRequest> configureRequest = null)
+    public RabbitMqManagementClient(string apiAddresses, string username, string password, bool useSsl = false, TimeSpan? timeout = null, Action<HttpClient> configureClient = null)
     {
         this.portNumber = useSsl ? sslEnabledPort : sslDisabledPort;
         this.useSsl = useSsl;
@@ -49,21 +47,31 @@ public sealed class RabbitMqManagementClient
         if (string.IsNullOrEmpty(username)) throw new ArgumentException("username is null or empty");
         if (string.IsNullOrEmpty(password)) throw new ArgumentException("password is null or empty");
 
-        if (configureRequest == null)
-        {
-            configureRequest = x => { };
-        }
-
         this.username = username;
         this.password = password;
 
         this.timeout = timeout ?? defaultTimeout;
-        this.configureRequest = configureRequest;
         this.settings = new JsonSerializerOptions
         {
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
             PropertyNameCaseInsensitive = true
         };
+
+        var handler = new HttpClientHandler
+        {
+            Credentials = new System.Net.NetworkCredential(username, password),
+            PreAuthenticate = true
+        };
+
+        httpClient = new HttpClient(handler)
+        {
+            Timeout = this.timeout
+        };
+
+        var authToken = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+        configureClient?.Invoke(httpClient);
     }
 
     private void TryInitializeApiHostName(string address, bool useSsl)
@@ -82,234 +90,155 @@ public sealed class RabbitMqManagementClient
         }
     }
 
-    public Vhost CreateVirtualHost(string virtualHostName)
+    public async Task<Vhost> CreateVirtualHostAsync(string virtualHostName)
     {
         if (string.IsNullOrEmpty(virtualHostName)) throw new ArgumentException("virtualHostName is null or empty");
 
-        Put($"vhosts/{virtualHostName}");
+        await PutAsync($"vhosts/{virtualHostName}").ConfigureAwait(false);
 
-        return GetVhost(virtualHostName);
+        return await GetVhostAsync(virtualHostName).ConfigureAwait(false);
     }
 
-    public Vhost GetVhost(string vhostName)
+    public async Task<Vhost> GetVhostAsync(string vhostName)
     {
         string vhost = SanitiseVhostName(vhostName);
-        return Get<Vhost>($"vhosts/{vhost}");
+
+        return await GetAsync<Vhost>($"vhosts/{vhost}").ConfigureAwait(false);
     }
 
-    public IEnumerable<Vhost> GetVHosts()
+    public async Task<IEnumerable<Vhost>> GetVHostsAsync()
     {
-        return Get<IEnumerable<Vhost>>("vhosts");
+        return await GetAsync<IEnumerable<Vhost>>("vhosts").ConfigureAwait(false);
     }
 
-    public void CreatePermission(PermissionInfo permissionInfo)
+
+    public async Task CreatePermissionAsync(PermissionInfo permissionInfo)
     {
         if (permissionInfo is null) throw new ArgumentNullException("permissionInfo");
 
         string vhost = SanitiseVhostName(permissionInfo.GetVirtualHostName());
         string username = permissionInfo.GetUserName();
-        Put($"permissions/{vhost}/{username}", permissionInfo);
+        await PutAsync($"permissions/{vhost}/{username}", permissionInfo).ConfigureAwait(false);
     }
 
-    public void CreateFederatedExchange(FederatedExchange exchange, string ownerVhost)
+    public async Task CreateFederatedExchangeAsync(FederatedExchange exchange, string ownerVhost)
     {
-        Put($"parameters/federation-upstream/{ownerVhost}/{exchange.Name}", exchange);
+        await PutAsync($"parameters/federation-upstream/{ownerVhost}/{exchange.Name}", exchange).ConfigureAwait(false);
     }
 
-    public void CreatePolicy(Policy policy, string ownerVhost)
+    public async Task CreatePolicyAsync(Policy policy, string ownerVhost)
     {
-        Put($"policies/{ownerVhost}/{policy.Name}", policy);
+        await PutAsync($"policies/{ownerVhost}/{policy.Name}", policy).ConfigureAwait(false);
     }
 
-    public IEnumerable<User> GetUsers()
+    public async Task<IEnumerable<User>> GetUsersAsync()
     {
-        return Get<IEnumerable<User>>("users");
+        return await GetAsync<IEnumerable<User>>("users").ConfigureAwait(false);
     }
 
-    public User GetUser(string userName)
+    public async Task<User> GetUserAsync(string userName)
     {
-        return Get<User>(string.Format("users/{0}", userName));
+        return await GetAsync<User>(string.Format("users/{0}", userName)).ConfigureAwait(false);
     }
 
-    public User CreateUser(UserInfo userInfo)
+    public async Task<User> CreateUserAsync(UserInfo userInfo)
     {
         if (userInfo is null) throw new ArgumentNullException("userInfo");
 
         string username = userInfo.GetName();
 
-        Put($"users/{username}", userInfo);
+        await PutAsync($"users/{username}", userInfo).ConfigureAwait(false);
 
-        return GetUser(userInfo.GetName());
+        return await GetUserAsync(userInfo.GetName()).ConfigureAwait(false);
     }
 
-    private void Put(string path)
+    private async Task PutAsync(string path)
     {
-        var request = CreateRequestForPath(path);
-        request.Method = "PUT";
-        request.ContentType = "application/json";
+        var uri = await BuildEndpointUriAsync(path).ConfigureAwait(false);
 
-        using (var response = (HttpWebResponse)request.GetResponse())
+        using var request = new HttpRequestMessage(HttpMethod.Put, uri);
+        request.Content = new StringContent(string.Empty, Encoding.UTF8, "application/json");
+
+        using var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+
+        // The "Cowboy" server in 3.7.0's Management Client returns 201 Created.
+        // "MochiWeb/1.1 WebMachine/1.10.0 (never breaks eye contact)" in 3.6.1 and previous return 204 No Content
+        // Also acceptable for a PUT response is 200 OK
+        // See also http://stackoverflow.com/questions/797834/should_a_restful_put_operation_return_something
+        if (!(response.StatusCode == System.Net.HttpStatusCode.OK ||
+         response.StatusCode == System.Net.HttpStatusCode.Created ||
+            response.StatusCode == System.Net.HttpStatusCode.NoContent))
         {
-            // The "Cowboy" server in 3.7.0's Management Client returns 201 Created.
-            // "MochiWeb/1.1 WebMachine/1.10.0 (never breaks eye contact)" in 3.6.1 and previous return 204 No Content
-            // Also acceptable for a PUT response is 200 OK
-            // See also http://stackoverflow.com/questions/797834/should-a-restful-put-operation-return-something
-            if (!(response.StatusCode == HttpStatusCode.OK ||
-                  response.StatusCode == HttpStatusCode.Created ||
-                  response.StatusCode == HttpStatusCode.NoContent))
-            {
-                throw new UnexpectedHttpStatusCodeException(response.StatusCode);
-            }
+            throw new UnexpectedHttpStatusCodeException(response.StatusCode);
         }
     }
 
-    private void Put<T>(string path, T item)
+    private async Task PutAsync<T>(string path, T item)
     {
-        var request = CreateRequestForPath(path);
-        request.Method = "PUT";
+        var uri = await BuildEndpointUriAsync(path).ConfigureAwait(false);
 
-        InsertRequestBody(request, item);
+        var json = JsonSerializer.Serialize(item, settings);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using (var response = (HttpWebResponse)request.GetResponse())
+        using var response = await httpClient.PutAsync(uri, content).ConfigureAwait(false);
+
+        // The "Cowboy" server in 3.7.0's Management Client returns 201 Created.
+        // "MochiWeb/1.1 WebMachine/1.10.0 (never breaks eye contact)" in 3.6.1 and previous return 204 No Content
+        // Also acceptable for a PUT response is 200 OK
+        // See also http://stackoverflow.com/questions/797834/should_a_restful_put_operation_return_something
+        if (!(response.StatusCode == System.Net.HttpStatusCode.OK ||
+              response.StatusCode == System.Net.HttpStatusCode.Created ||
+         response.StatusCode == System.Net.HttpStatusCode.NoContent))
         {
-            // The "Cowboy" server in 3.7.0's Management Client returns 201 Created.
-            // "MochiWeb/1.1 WebMachine/1.10.0 (never breaks eye contact)" in 3.6.1 and previous return 204 No Content
-            // Also acceptable for a PUT response is 200 OK
-            // See also http://stackoverflow.com/questions/797834/should-a-restful-put-operation-return-something
-            if (!(response.StatusCode == HttpStatusCode.OK ||
-                  response.StatusCode == HttpStatusCode.Created ||
-                  response.StatusCode == HttpStatusCode.NoContent))
-            {
-                throw new UnexpectedHttpStatusCodeException(response.StatusCode);
-            }
+            throw new UnexpectedHttpStatusCodeException(response.StatusCode);
         }
     }
 
-    private T Get<T>(string path, params object[] queryObjects)
+    private async Task<T> GetAsync<T>(string path, params object[] queryObjects)
     {
-        var request = CreateRequestForPath(path, queryObjects);
-
-        using (var response = (HttpWebResponse)request.GetResponse())
-        {
-            if (response.StatusCode != HttpStatusCode.OK)
-            {
-                throw new UnexpectedHttpStatusCodeException(response.StatusCode);
-            }
-            return DeserializeResponse<T>(response);
-        }
-    }
-
-    private void InsertRequestBody<T>(HttpWebRequest request, T item)
-    {
-        request.ContentType = "application/json";
-
-        var body = JsonSerializer.Serialize(item, settings);
-        using (var requestStream = request.GetRequestStream())
-        using (var writer = new StreamWriter(requestStream))
-        {
-            writer.Write(body);
-        }
-    }
-
-    private string SanitiseVhostName(string vhostName) => vhostName.Replace("/", "%2f");
-
-    private T DeserializeResponse<T>(HttpWebResponse response)
-    {
-        var responseBody = GetBodyFromResponse(response);
-        return JsonSerializer.Deserialize<T>(responseBody, settings);
-    }
-
-    private static string GetBodyFromResponse(HttpWebResponse response)
-    {
-        string responseBody;
-        using (var responseStream = response.GetResponseStream())
-        {
-            if (responseStream == null)
-            {
-                //throw new EasyNetQManagementException("Response stream was null");
-            }
-            using (var reader = new StreamReader(responseStream))
-            {
-                responseBody = reader.ReadToEnd();
-            }
-        }
-        return responseBody;
-    }
-
-    private HttpWebRequest CreateRequestForPath(string path, object[] queryObjects = null)
-    {
-        var endpointAddress = BuildEndpointAddress(path);
         var queryString = BuildQueryString(queryObjects);
+        var fullPath = path + queryString;
+        var uri = await BuildEndpointUriAsync(fullPath).ConfigureAwait(false);
 
-        var uri = new Uri(endpointAddress + queryString);
+        using var response = await httpClient.GetAsync(uri).ConfigureAwait(false);
 
-        if (runningOnMono)
+        if (response.StatusCode != System.Net.HttpStatusCode.OK)
         {
-            // unsightly hack to fix path.
-            // The default vHost in RabbitMQ is named '/' which causes all sorts of problems :(
-            // We need to escape it to %2f, but System.Uri then unescapes it back to '/'
-            // The horrible fix is to reset the path field to the original path value, after it's
-            // been set.
-            var pathField = typeof(Uri).GetField("path", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (pathField == null)
-            {
-                throw new ApplicationException("Could not resolve path field");
-            }
-            var alteredPath = (string)pathField.GetValue(uri);
-            alteredPath = alteredPath.Replace(@"///", @"/%2f/");
-            alteredPath = alteredPath.Replace(@"//", @"/%2f");
-            alteredPath = alteredPath.Replace("+", "%2b");
-            pathField.SetValue(uri, alteredPath);
+            throw new UnexpectedHttpStatusCodeException(response.StatusCode);
         }
 
-        var request = (HttpWebRequest)WebRequest.Create(uri);
-        request.Credentials = new NetworkCredential(username, password);
-        request.Timeout = request.ReadWriteTimeout = (int)timeout.TotalMilliseconds;
-        request.KeepAlive = false; //default WebRequest.KeepAlive to false to resolve spurious 'the request was aborted: the request was canceled' exceptions
-
-        configureRequest(request);
-
-        return request;
+        var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        return JsonSerializer.Deserialize<T>(content, settings);
     }
 
-    private string BuildEndpointAddress(string path)
+    private string SanitiseVhostName(string vhostName) => Uri.EscapeDataString(vhostName);
+
+    private async Task<Uri> BuildEndpointUriAsync(string path)
     {
-        if (string.IsNullOrEmpty(lastKnownApiAddress) == false)
+        if (!string.IsNullOrEmpty(lastKnownApiAddress) && await IsHostRespondingAsync(lastKnownApiAddress))
         {
-            if (IsHostResponding(lastKnownApiAddress))
-                return string.Format("{0}/api/{1}", lastKnownApiAddress, path);
+            return new Uri($"{lastKnownApiAddress}/api/{path}");
         }
 
         foreach (var apiAddress in apiAddressCollection)
         {
-            if (IsHostResponding(apiAddress))
+            if (await IsHostRespondingAsync(apiAddress).ConfigureAwait(false))
             {
                 lastKnownApiAddress = apiAddress;
-                return string.Format("{0}/api/{1}", apiAddress, path);
+                return new Uri($"{apiAddress}/api/{path}");
             }
         }
 
         throw new Exception("Unable to connect to any of the provided API hosts.");
     }
 
-    private bool IsHostResponding(string address)
+    private async Task<bool> IsHostRespondingAsync(string address)
     {
         try
         {
-            HttpWebRequest myRequest = (HttpWebRequest)WebRequest.Create(address);
-            myRequest.Timeout = 1000;
-            HttpWebResponse response = (HttpWebResponse)myRequest.GetResponse();
-
-            if (response.StatusCode == HttpStatusCode.OK)
-            {
-                response.Close();
-                return true;
-            }
-            else
-            {
-                response.Close();
-                return false;
-            }
+            using var testClient = new HttpClient();
+            var response = await testClient.GetAsync(address);
+            return response.StatusCode == System.Net.HttpStatusCode.OK;
         }
         catch (Exception)
         {
@@ -339,10 +268,15 @@ public sealed class RabbitMqManagementClient
                 {
                     queryStringBuilder.Append("&");
                 }
-                queryStringBuilder.AppendFormat("{0}={1}", name, value ?? string.Empty);
+                queryStringBuilder.AppendFormat("{0}={1}", Uri.EscapeDataString(name), Uri.EscapeDataString(value?.ToString() ?? string.Empty));
                 first = false;
             }
         }
         return queryStringBuilder.ToString();
+    }
+
+    public void Dispose()
+    {
+        httpClient?.Dispose();
     }
 }

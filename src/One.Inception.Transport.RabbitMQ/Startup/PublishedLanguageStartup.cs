@@ -12,8 +12,8 @@ public class PublishedLanguageStartup : IInceptionStartup
         this.infrastructure = infrastructure;
     }
 
-    public Task BootstrapAsync()
+    public async Task BootstrapAsync()
     {
-        return infrastructure.InitializeAsync();
+        await infrastructure.InitializeAsync();
     }
 }
