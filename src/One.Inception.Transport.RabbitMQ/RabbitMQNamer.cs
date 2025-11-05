@@ -14,6 +14,13 @@ public interface IRabbitMqNamer
     /// <returns>The exchange names.</returns>
     IEnumerable<string> Get_PublishTo_ExchangeNames(Type messageType);
 
+    /// <summary>
+    /// Returns all exchange names that should be declared for this message.
+    /// </summary>
+    /// <param name="messageType">The message type.</param>
+    /// <returns>The exchange names.</returns>
+    IEnumerable<string> Get_ExchangeNames_To_Declare(Type messageType);
+
     IEnumerable<string> Get_BindTo_ExchangeNames(Type messageType);
 
     string Get_QueueName(Type messageType, bool useFanoutMode = false);
@@ -70,6 +77,7 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
         if (typeof(ISignal).IsAssignableFrom(messageType))
         {
             yield return $"{systemMarker}Signals";
+            yield return $"{bc}.{systemMarker}Signals";
 
             isConventionalMessageType = true;
         }
@@ -140,6 +148,64 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
         if (typeof(ISignal).IsAssignableFrom(messageType))
         {
             yield return $"{systemMarker}Signals";
+
+            isConventionalMessageType = true;
+        }
+
+        if (typeof(AggregateCommit).IsAssignableFrom(messageType))
+        {
+            yield return $"{bc}.{systemMarker}AggregateCommits";
+            isConventionalMessageType = true;
+        }
+
+        // This handles the message types which are not defined by 1nception.
+        if (isConventionalMessageType == false)
+        {
+            yield return $"{bc}.{systemMarker}{messageType.Name}";
+        }
+    }
+
+    public IEnumerable<string> Get_ExchangeNames_To_Declare(Type messageType)
+    {
+        string systemMarker = typeof(ISystemMessage).IsAssignableFrom(messageType) ? "inception." : string.Empty;
+
+        string bc = messageType.GetBoundedContext(boundedContext.Name);
+        bool isConventionalMessageType = false;
+
+        if (typeof(ICommand).IsAssignableFrom(messageType))
+        {
+            yield return $"{bc}.{systemMarker}Commands";
+            isConventionalMessageType = true;
+        }
+
+        if (typeof(IEvent).IsAssignableFrom(messageType))
+        {
+            yield return $"{bc}.{systemMarker}Events";
+            isConventionalMessageType = true;
+        }
+
+        if (typeof(IScheduledMessage).IsAssignableFrom(messageType))
+        {
+            yield return $"{bc}.{systemMarker}Events";
+            isConventionalMessageType = true;
+        }
+
+        if (typeof(IPublicEvent).IsAssignableFrom(messageType))
+        {
+            yield return $"{systemMarker}PublicEvents";
+
+            if (boundedContext.Name.Equals(bc, StringComparison.OrdinalIgnoreCase))
+                yield return $"{bc}.{systemMarker}Events";
+
+            isConventionalMessageType = true;
+        }
+
+        if (typeof(ISignal).IsAssignableFrom(messageType))
+        {
+            yield return $"{systemMarker}Signals";
+
+            if (boundedContext.Name.Equals(bc, StringComparison.OrdinalIgnoreCase))
+                yield return $"{bc}.{systemMarker}Signals"; // We need this exchange for backward compatibility. Note that Signals are always published to the global Signals exchange. This is just for handling of old messages. (Newgen publishes messages in this exchange).
 
             isConventionalMessageType = true;
         }

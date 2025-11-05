@@ -125,7 +125,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         var messageTypes = subscriberCollection.Subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
 
         var publishToExchangeGroups = messageTypes
-            .SelectMany(mt => bcRabbitMqNamer.Get_PublishTo_ExchangeNames(mt).Select(x => new { Exchange = x, MessageType = mt }))
+            .SelectMany(mt => bcRabbitMqNamer.Get_ExchangeNames_To_Declare(mt).Select(x => new { Exchange = x, MessageType = mt }))
             .GroupBy(x => x.Exchange)
             .Distinct()
             .ToList();
@@ -134,7 +134,6 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         {
             await channel.ExchangeDeclareAsync(publishExchangeGroup.Key, PipelineType.Headers.ToString(), true).ConfigureAwait(false);
         }
-
 
         Dictionary<string, Dictionary<string, List<string>>> event2Handler = BuildEventToHandler();
 
@@ -150,9 +149,8 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         bool thereIsAScheduledQueue = false;
         string scheduledQueue = string.Empty;
 
-        bool isTriggerQueue = typeof(T).Name.Equals(typeof(ITrigger).Name);
         bool isSagaQueue = typeof(T).Name.Equals(typeof(ISaga).Name) || typeof(T).Name.Equals(typeof(ISystemSaga).Name);
-        if (isSagaQueue || isTriggerQueue)
+        if (isSagaQueue)
         {
             bool hasOneExchangeGroup = bindToExchangeGroups.Count == 1;
             if (hasOneExchangeGroup)
@@ -172,6 +170,26 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             {
                 throw new Exception($"There are more than one exchanges defined for {typeof(T).Name}. RabbitMQ does not allow this functionality and you need to fix one or more of the following subscribers:{Environment.NewLine}{string.Join(Environment.NewLine, subscriberCollection.Subscribers.Select(sub => sub.Id))}");
             }
+        }
+
+        bool isTriggerQueue = typeof(T).Name.Equals(typeof(ITrigger).Name);
+        if (isTriggerQueue)
+        {
+            if (bindToExchangeGroups.Count > 1)
+            {
+                logger.LogWarning("There are more than one exchanges defined for {handlerType}. RabbitMQ does not allow this functionality. We will pick first exchange.", typeof(T).Name);
+            }
+
+            string targetExchangeAfterTtlExpires = bindToExchangeGroups[0].Key;
+            var arguments = new Dictionary<string, object>()
+            {
+                { "x-dead-letter-exchange", targetExchangeAfterTtlExpires}
+            };
+
+            scheduledQueue = $"{queueName}.Scheduled";
+            await channel.QueueDeclareAsync(scheduledQueue, true, false, false, arguments).ConfigureAwait(false);
+
+            thereIsAScheduledQueue = true;
         }
 
         bool isIEventStoreIndex = typeof(T).Name.Equals(typeof(IEventStoreIndex).Name);
