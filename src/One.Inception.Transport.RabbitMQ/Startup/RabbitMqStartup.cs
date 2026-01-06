@@ -172,7 +172,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         }
 
         bool isTriggerQueue = typeof(T).Name.Equals(typeof(ITrigger).Name);
-        if (isTriggerQueue)
+        if (isTriggerQueue && bindToExchangeGroups.Count > 0)
         {
             if (bindToExchangeGroups.Count > 1)
             {
@@ -180,6 +180,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             }
 
             string targetExchangeAfterTtlExpires = bindToExchangeGroups[0].Key;
+
             var arguments = new Dictionary<string, object>()
             {
                 { "x-dead-letter-exchange", targetExchangeAfterTtlExpires}
@@ -189,6 +190,8 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             model.QueueDeclare(scheduledQueue, true, false, false, arguments);
 
             thereIsAScheduledQueue = true;
+
+            logger.LogWarning("There are more than one exchanges defined for {handlerType}. RabbitMQ does not allow this functionality. We will pick first exchange.", typeof(T).Name);
         }
 
         bool isIEventStoreIndex = typeof(T).Name.Equals(typeof(IEventStoreIndex).Name);
