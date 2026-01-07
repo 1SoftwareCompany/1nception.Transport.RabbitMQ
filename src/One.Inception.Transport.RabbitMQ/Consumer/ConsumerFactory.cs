@@ -15,7 +15,7 @@ namespace One.Inception.Transport.RabbitMQ;
 public class ConsumerFactory<T>
 {
     private readonly ILogger<ConsumerFactory<T>> logger;
-    private readonly TypeContainer<ISaga> allSagas;
+    private readonly TypeContainer<IProcessManager> allProcessManagers;
     private readonly TypeContainer<ITrigger> allTriggers;
     private readonly ConsumerPerQueueChannelResolver channelResolver;
     private readonly ISerializer serializer;
@@ -27,11 +27,11 @@ public class ConsumerFactory<T>
     private readonly RabbitMqOptions options;
     private string queueName;
 
-    public ConsumerFactory(TypeContainer<ISaga> allSagas, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger)
+    public ConsumerFactory(TypeContainer<IProcessManager> allProcessManagers, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger)
     {
         this.logger = logger;
         this.boundedContext = boundedContext.CurrentValue;
-        this.allSagas = allSagas;
+        this.allProcessManagers = allProcessManagers;
         this.allTriggers = allTriggers;
         this.channelResolver = channelResolver;
         this.serializer = serializer;
@@ -88,12 +88,12 @@ public class ConsumerFactory<T>
 
     private async Task CreateAndStartSchedulePokerAsync(CancellationToken cancellationToken)
     {
-        bool isSaga = typeof(ISaga).IsAssignableFrom(typeof(T));
-        if (isSaga)
+        bool isProcessManager = typeof(IProcessManager).IsAssignableFrom(typeof(T));
+        if (isProcessManager)
         {
-            bool isSystemSaga = typeof(ISystemSaga).IsAssignableFrom(typeof(T));
-            bool hasRegisteredSagas = allSagas.Items.Where(saga => typeof(ISystemSaga).IsAssignableFrom(saga) == isSystemSaga).Any();
-            if (hasRegisteredSagas)
+            bool isSystemProcessManager = typeof(ISystemProcessManager).IsAssignableFrom(typeof(T));
+            bool hasRegisteredProcessManager = allProcessManagers.Items.Where(processManager => typeof(ISystemProcessManager).IsAssignableFrom(processManager) == isSystemProcessManager).Any();
+            if (hasRegisteredProcessManager)
             {
                 //This should not be awaited here to avoid deadlocks
                 schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);

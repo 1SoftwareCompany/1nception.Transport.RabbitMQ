@@ -149,8 +149,8 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         bool thereIsAScheduledQueue = false;
         string scheduledQueue = string.Empty;
 
-        bool isSagaQueue = typeof(T).Name.Equals(typeof(ISaga).Name) || typeof(T).Name.Equals(typeof(ISystemSaga).Name);
-        if (isSagaQueue)
+        bool isProcessManagerQueue = typeof(T).Name.Equals(typeof(IProcessManager).Name) || typeof(T).Name.Equals(typeof(ISystemProcessManager).Name);
+        if (isProcessManagerQueue)
         {
             bool hasOneExchangeGroup = bindToExchangeGroups.Count == 1;
             if (hasOneExchangeGroup)
@@ -312,9 +312,9 @@ public class Port_Startup : RabbitMqStartup<IPort>
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
-public class Saga_Startup : RabbitMqStartup<ISaga>
+public class ProcessManager_Startup : RabbitMqStartup<IProcessManager>
 {
-    public Saga_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISaga> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<Saga_Startup> logger) : base(consumerOptions, boundedContext, tenantsOptions, subscriberCollection, connectionFactory, bcRabbitMqNamer, logger) { }
+    public ProcessManager_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IProcessManager> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<ProcessManager_Startup> logger) : base(consumerOptions, boundedContext, tenantsOptions, subscriberCollection, connectionFactory, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
@@ -336,9 +336,9 @@ public class SystemAppService_Startup : RabbitMqStartup<ISystemAppService>
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
-public class SystemSaga_Startup : RabbitMqStartup<ISystemSaga>
+public class SystemProcessManager_Startup : RabbitMqStartup<ISystemProcessManager>
 {
-    public SystemSaga_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemSaga> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemSaga_Startup> logger) : base(consumerOptions, boundedContext, tenantsOptions, subscriberCollection, connectionFactory, bcRabbitMqNamer, logger) { }
+    public SystemProcessManager_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<ISystemProcessManager> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<SystemProcessManager_Startup> logger) : base(consumerOptions, boundedContext, tenantsOptions, subscriberCollection, connectionFactory, bcRabbitMqNamer, logger) { }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
