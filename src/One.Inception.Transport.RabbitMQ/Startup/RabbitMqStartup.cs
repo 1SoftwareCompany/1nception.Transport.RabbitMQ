@@ -173,7 +173,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         }
 
         bool isTriggerQueue = typeof(T).Name.Equals(typeof(ITrigger).Name);
-        if (isTriggerQueue)
+        if (isTriggerQueue && bindToExchangeGroups.Count > 0)
         {
             if (bindToExchangeGroups.Count > 1)
             {
