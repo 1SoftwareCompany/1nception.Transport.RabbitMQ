@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using One.Inception.MessageProcessing;
-using One.Inception.Transport.RabbitMQ.SeparateQueues;
+using One.Inception.Transport.RabbitMQ.DedicatedQueues;
 using One.Inception.Transport.RabbitMQ.Startup;
 using RabbitMQ.Client;
 
@@ -29,7 +29,7 @@ public class ConsumerFactory<T>
     private readonly BoundedContextRabbitMqNamer bcRabbitMqNamer;
     private string queueName;
 
-    public ConsumerFactory(TypeContainer<IProcessManager> allProcessManagers, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger, BoundedContextRabbitMqNamer bcRabbitMqNamer)
+    public ConsumerFactory(TypeContainer<IProcessManager> allProcessManagers, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<ConsumerFactory<T>> logger)
     {
         this.logger = logger;
         this.boundedContext = boundedContext.CurrentValue;
@@ -41,9 +41,9 @@ public class ConsumerFactory<T>
         this.subscriberCollection = subscriberCollection;
         this.schedulePoker = schedulePoker;
         this.options = optionsMonitor.CurrentValue;
+        this.bcRabbitMqNamer = bcRabbitMqNamer;
 
         queueName = bcRabbitMqNamer.Get_QueueName(typeof(T), this.consumerOptions.FanoutMode);
-        this.bcRabbitMqNamer = bcRabbitMqNamer;
     }
 
     public async Task CreateAndStartConsumersAsync(CancellationToken cancellationToken)
@@ -62,7 +62,7 @@ public class ConsumerFactory<T>
     {
         IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
 
-        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
         if (subscribersWithDedicatedQueues.Any())
         {
             foreach (var subscriber in subscribersWithDedicatedQueues)
@@ -97,7 +97,7 @@ public class ConsumerFactory<T>
 
     private async Task CreateAndStartNormalConsumersAsync()
     {
-        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
         if (subscribersWithDedicatedQueues.Any())
         {
             foreach (ISubscriber subscriber in subscribersWithDedicatedQueues)
@@ -105,7 +105,7 @@ public class ConsumerFactory<T>
                 string queueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode);
                 for (int i = 0; i < consumerOptions.WorkersCount; i++)
                 {
-                    string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}"; // consumer key same as regular or the subscriber.HandlerType?
+                    string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}";
                     IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
 
                     AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
@@ -141,7 +141,7 @@ public class ConsumerFactory<T>
             bool hasRegisteredProcessManager = registeredSagas.Any();
             if (hasRegisteredProcessManager)
             {
-                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
                 foreach (var subscriber in subscribersWithDedicatedQueues)
                 {
                     string seperateQueueName = $"{bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode)}.Scheduled";
@@ -166,7 +166,7 @@ public class ConsumerFactory<T>
             var allNormalTriggers = allTriggers.Items.Where(justTrigger => typeof(ISystemHandler).IsAssignableFrom(justTrigger) == false);
             if (allNormalTriggers.Any())
             {
-                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
                 foreach (var subscriber in subscribersWithDedicatedQueues)
                 {
                     string queueName = $"{bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode)}.Scheduled";
@@ -188,14 +188,5 @@ public class ConsumerFactory<T>
 
         subscriberCollection.UnsubscribeAll();
         consumers.Clear();
-    }
-
-    private IEnumerable<ISubscriber> SubscribersWithDedicatedQueuesOnly()
-    {
-        foreach (var subscriber in subscriberCollection.Subscribers)
-        {
-            if (DedicatedQueueCache.IsDedicatedQueue(subscriber.HandlerType))
-                yield return subscriber;
-        }
     }
 }

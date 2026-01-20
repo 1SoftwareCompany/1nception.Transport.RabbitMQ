@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using One.Inception.MessageProcessing;
-using One.Inception.Transport.RabbitMQ.SeparateQueues;
+using One.Inception.Transport.RabbitMQ.DedicatedQueues;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -132,7 +132,7 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
         }
 
         var subscribers = subscriberCollection.GetInterestedSubscribers(inceptionMessage);
-        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
         var onlyTheTrueSubscribers = subscribers.Except(subscribersWithDedicatedQueues);
 
         try
@@ -170,15 +170,6 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
             {
                 await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
             }
-        }
-    }
-
-    private IEnumerable<ISubscriber> SubscribersWithDedicatedQueuesOnly()
-    {
-        foreach (var subscriber in subscriberCollection.Subscribers)
-        {
-            if (DedicatedQueueCache.IsDedicatedQueue(subscriber.HandlerType))
-                yield return subscriber;
         }
     }
 }
