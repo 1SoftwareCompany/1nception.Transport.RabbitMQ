@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using One.Inception.MessageProcessing;
 using Microsoft.Extensions.Logging;
+using One.Inception.MessageProcessing;
+using One.Inception.Transport.RabbitMQ.SeparateQueues;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -76,6 +78,17 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
             }
         }
     }
+
+    protected InceptionMessage ExpandRawPayload(InceptionMessage inceptionMessage)
+    {
+        if (inceptionMessage.Payload is null && inceptionMessage.PayloadRaw?.Length > 0)
+        {
+            IMessage payload = serializer.DeserializeFromBytes<IMessage>(inceptionMessage.PayloadRaw);
+            return new InceptionMessage(payload, inceptionMessage.Headers);
+        }
+
+        return inceptionMessage;
+    }
 }
 
 public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
@@ -101,12 +114,12 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
 
     protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
     {
-        InceptionMessage InceptionMessage = null;
+        InceptionMessage inceptionMessage = null;
         List<Task> deliverTasks = new List<Task>();
         try
         {
-            InceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
-            InceptionMessage = ExpandRawPayload(InceptionMessage);
+            inceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
+            inceptionMessage = ExpandRawPayload(inceptionMessage);
         }
         catch (Exception ex)
         {
@@ -118,13 +131,15 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
             return;
         }
 
-        var subscribers = subscriberCollection.GetInterestedSubscribers(InceptionMessage);
+        var subscribers = subscriberCollection.GetInterestedSubscribers(inceptionMessage);
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+        var onlyTheTrueSubscribers = subscribers.Except(subscribersWithDedicatedQueues);
 
         try
         {
-            foreach (var subscriber in subscribers)
+            foreach (var subscriber in onlyTheTrueSubscribers)
             {
-                deliverTasks.Add(SafeProcessAsync(subscriber, InceptionMessage));
+                deliverTasks.Add(SafeProcessAsync(subscriber, inceptionMessage));
             }
 
             await Task.WhenAll(deliverTasks).ConfigureAwait(false);
@@ -140,7 +155,7 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
                         subscriberErrors.AppendLine(subscriberCompletedTasks.Exception.ToString());
                     }
                 }
-                logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", InceptionMessage.GetMessageType(), InceptionMessage, subscriberErrors.ToString());
+                logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", inceptionMessage.GetMessageType(), inceptionMessage, subscriberErrors.ToString());
             }
         ))
         { }
@@ -158,14 +173,86 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
         }
     }
 
-    protected InceptionMessage ExpandRawPayload(InceptionMessage InceptionMessage)
+    private IEnumerable<ISubscriber> SubscribersWithDedicatedQueuesOnly()
     {
-        if (InceptionMessage.Payload is null && InceptionMessage.PayloadRaw?.Length > 0)
+        foreach (var subscriber in subscriberCollection.Subscribers)
         {
-            IMessage payload = serializer.DeserializeFromBytes<IMessage>(InceptionMessage.PayloadRaw);
-            return new InceptionMessage(payload, InceptionMessage.Headers);
+            if (DedicatedQueueCache.IsDedicatedQueue(subscriber.HandlerType))
+                yield return subscriber;
+        }
+    }
+}
+
+public abstract class AsyncConsumerCustomForSingleSubscriberBase : AsyncConsumerBase
+{
+    private readonly ISubscriber subscriber;
+
+    public AsyncConsumerCustomForSingleSubscriberBase(IChannel channel, ISubscriber subscriber, ISerializer serializer, ILogger logger) : base(channel, serializer, logger)
+    {
+        this.subscriber = subscriber;
+    }
+
+    private Task SafeProcessAsync(ISubscriber subscriber, InceptionMessage InceptionMessage)
+    {
+        try
+        {
+            return subscriber.ProcessAsync(InceptionMessage);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
+    protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
+    {
+        InceptionMessage inceptionMessage = null;
+        try
+        {
+            inceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
+            inceptionMessage = ExpandRawPayload(inceptionMessage);
+        }
+        catch (Exception ex)
+        {
+            // TODO: send to dead letter exchange/queue
+            // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
+            logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
+            await AckAsync(ev, consumer).ConfigureAwait(false);
+
+            return;
         }
 
-        return InceptionMessage;
+        Task task = null;
+        try
+        {
+            task = SafeProcessAsync(subscriber, inceptionMessage);
+
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (True(() =>
+        {
+            // Try find some errors
+            StringBuilder subscriberError = new StringBuilder();
+
+            if (task.IsFaulted)
+            {
+                subscriberError.AppendLine(task.Exception.ToString());
+            }
+            logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", inceptionMessage.GetMessageType(), inceptionMessage, subscriberError.ToString());
+        }
+        ))
+        { }
+        finally
+        {
+            await AckAsync(ev, consumer).ConfigureAwait(false);
+        }
+
+        async Task AckAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
+        {
+            if (consumer.Channel.IsOpen)
+            {
+                await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
+            }
+        }
     }
 }

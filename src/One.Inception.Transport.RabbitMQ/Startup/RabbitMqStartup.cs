@@ -1,14 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using One.Inception.EventStore.Index;
 using One.Inception.MessageProcessing;
 using One.Inception.Migrations;
 using One.Inception.Multitenancy;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using One.Inception.Transport.RabbitMQ.SeparateQueues;
 using RabbitMQ.Client;
-using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Startup;
 
@@ -19,10 +20,12 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
     private readonly IRabbitMqConnectionFactory connectionFactory;
     private readonly BoundedContextRabbitMqNamer bcRabbitMqNamer;
     private readonly ILogger<RabbitMqStartup<T>> logger;
+    private readonly RabbitMqConsumerOptions consumerOptions;
 
     private TenantsOptions tenantsOptions;
     private bool isSystemQueue = false;
-    private readonly string queueName;
+
+    private readonly string regularQueueName;
 
     public RabbitMqStartup(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, ISubscriberCollection<T> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<RabbitMqStartup<T>> logger)
     {
@@ -32,9 +35,13 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         this.connectionFactory = connectionFactory;
         this.bcRabbitMqNamer = bcRabbitMqNamer;
         this.logger = logger;
+        this.consumerOptions = consumerOptions.CurrentValue;
 
-        isSystemQueue = typeof(ISystemHandler).IsAssignableFrom(typeof(T));
-        queueName = bcRabbitMqNamer.Get_QueueName(typeof(T), consumerOptions.CurrentValue.FanoutMode);
+        var type = typeof(T);
+
+        isSystemQueue = typeof(ISystemHandler).IsAssignableFrom(type);
+
+        regularQueueName = bcRabbitMqNamer.Get_QueueName(type, consumerOptions.CurrentValue.FanoutMode);
 
         tenantsOptionsMonitor.OnChange(async newOptions =>
         {
@@ -44,9 +51,18 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             tenantsOptions = newOptions;
 
             using (IConnection connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
-            using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
+            using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
             {
-                await RecoverModelAsync(channel).ConfigureAwait(false);
+                IEnumerable<ISubscriber> subscribersWithSeparateQueues = SubscribersWithDedicatedQueuesOnly();
+
+                foreach (var subscriber in subscribersWithSeparateQueues)
+                {
+                    string specialQueueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, this.consumerOptions.FanoutMode);
+                    await RecoverModelAsync(specialQueueName, channel, [subscriber]).ConfigureAwait(false);
+                }
+
+                IEnumerable<ISubscriber> theRestOfTheSubscribers = subscriberCollection.Subscribers.Except(subscribersWithSeparateQueues);
+                await RecoverModelAsync(regularQueueName, channel, theRestOfTheSubscribers).ConfigureAwait(false);
             }
         });
     }
@@ -56,16 +72,25 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         using (var connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
         using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
         {
-            await RecoverModelAsync(channel).ConfigureAwait(false);
+            IEnumerable<ISubscriber> subscribersWithSeparateQueues = SubscribersWithDedicatedQueuesOnly();
+
+            foreach (var subscriber in subscribersWithSeparateQueues)
+            {
+                string specialQueueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode);
+                await RecoverModelAsync(specialQueueName, channel, [subscriber]).ConfigureAwait(false);
+            }
+
+            IEnumerable<ISubscriber> theRestOfTheSubscribers = subscriberCollection.Subscribers.Except(subscribersWithSeparateQueues);
+            await RecoverModelAsync(regularQueueName, channel, theRestOfTheSubscribers).ConfigureAwait(false);
         }
     }
 
-    private Dictionary<string, Dictionary<string, List<string>>> BuildEventToHandler()
+    private Dictionary<string, Dictionary<string, List<string>>> BuildEventToHandler(IEnumerable<ISubscriber> subscribers)
     {
         // exchangeName, dictionary<eventType,List<handlers>>
         var event2Handler = new Dictionary<string, Dictionary<string, List<string>>>();
 
-        foreach (ISubscriber subscriber in subscriberCollection.Subscribers)
+        foreach (ISubscriber subscriber in subscribers)
         {
             foreach (Type msgType in subscriber.GetInvolvedMessageTypes().Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue))
             {
@@ -97,11 +122,11 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         return event2Handler;
     }
 
-    private Dictionary<string, object> BuildQueueRoutingHeaders()
+    private Dictionary<string, object> BuildQueueRoutingHeaders(IEnumerable<ISubscriber> subscribers)
     {
         var routingHeaders = new Dictionary<string, object>();
 
-        foreach (var subscriber in subscriberCollection.Subscribers)
+        foreach (var subscriber in subscribers)
         {
             foreach (var msgType in subscriber.GetInvolvedMessageTypes().Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue))
             {
@@ -120,9 +145,9 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         return routingHeaders;
     }
 
-    private async Task RecoverModelAsync(IChannel channel)
+    private async Task RecoverModelAsync(string queueName, IChannel channel, IEnumerable<ISubscriber> subscribers)
     {
-        var messageTypes = subscriberCollection.Subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
+        var messageTypes = subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
 
         var publishToExchangeGroups = messageTypes
             .SelectMany(mt => bcRabbitMqNamer.Get_ExchangeNames_To_Declare(mt).Select(x => new { Exchange = x, MessageType = mt }))
@@ -135,9 +160,9 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             await channel.ExchangeDeclareAsync(publishExchangeGroup.Key, PipelineType.Headers.ToString(), true).ConfigureAwait(false);
         }
 
-        Dictionary<string, Dictionary<string, List<string>>> event2Handler = BuildEventToHandler();
+        Dictionary<string, Dictionary<string, List<string>>> event2Handler = BuildEventToHandler(subscribers);
 
-        Dictionary<string, object> routingHeaders = BuildQueueRoutingHeaders();
+        Dictionary<string, object> routingHeaders = BuildQueueRoutingHeaders(subscribers);
         await channel.QueueDeclareAsync(queueName, true, false, false, null).ConfigureAwait(false);
 
         var bindToExchangeGroups = messageTypes
@@ -168,7 +193,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             }
             else if (bindToExchangeGroups.Count > 1)
             {
-                throw new Exception($"There are more than one exchanges defined for {typeof(T).Name}. RabbitMQ does not allow this functionality and you need to fix one or more of the following subscribers:{Environment.NewLine}{string.Join(Environment.NewLine, subscriberCollection.Subscribers.Select(sub => sub.Id))}");
+                throw new Exception($"There are more than one exchanges defined for {typeof(T).Name}. RabbitMQ does not allow this functionality and you need to fix one or more of the following subscribers:{Environment.NewLine}{string.Join(Environment.NewLine, subscribers.Select(sub => sub.Id))}");
             }
         }
 
@@ -279,6 +304,15 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             headersRef.Add($"{messageContractId}@{handler}", currentBC);
         }
     }
+    
+    private IEnumerable<ISubscriber> SubscribersWithDedicatedQueuesOnly()
+    {
+        foreach (var subscriber in subscriberCollection.Subscribers)
+        {
+            if (DedicatedQueueCache.IsDedicatedQueue(subscriber.HandlerType))
+                yield return subscriber;
+        }
+    }
 }
 
 [InceptionStartup(Bootstraps.Configuration)]
@@ -364,4 +398,3 @@ public class MigrationHandler_Startup : RabbitMqStartup<IMigrationHandler>
 {
     public MigrationHandler_Startup(IOptionsMonitor<TenantsOptions> tenantsOptions, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISubscriberCollection<IMigrationHandler> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<MigrationHandler_Startup> logger) : base(consumerOptions, boundedContext, tenantsOptions, subscriberCollection, connectionFactory, bcRabbitMqNamer, logger) { }
 }
-

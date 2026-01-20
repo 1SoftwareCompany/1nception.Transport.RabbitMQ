@@ -1,14 +1,15 @@
 ﻿using System;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Collections.Generic;
 using System.Collections.Concurrent;
-using One.Inception.MessageProcessing;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RabbitMQ.Client;
+using One.Inception.MessageProcessing;
+using One.Inception.Transport.RabbitMQ.SeparateQueues;
 using One.Inception.Transport.RabbitMQ.Startup;
-using System.Threading;
+using RabbitMQ.Client;
 
 namespace One.Inception.Transport.RabbitMQ;
 
@@ -25,9 +26,10 @@ public class ConsumerFactory<T>
     private readonly SchedulePoker<T> schedulePoker;
     private readonly ConcurrentBag<AsyncConsumerBase> consumers = new ConcurrentBag<AsyncConsumerBase>();
     private readonly RabbitMqOptions options;
+    private readonly BoundedContextRabbitMqNamer bcRabbitMqNamer;
     private string queueName;
 
-    public ConsumerFactory(TypeContainer<IProcessManager> allProcessManagers, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger)
+    public ConsumerFactory(TypeContainer<IProcessManager> allProcessManagers, TypeContainer<ITrigger> allTriggers, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ConsumerPerQueueChannelResolver channelResolver, IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, ISerializer serializer, ISubscriberCollection<T> subscriberCollection, SchedulePoker<T> schedulePoker, ILogger<ConsumerFactory<T>> logger, BoundedContextRabbitMqNamer bcRabbitMqNamer)
     {
         this.logger = logger;
         this.boundedContext = boundedContext.CurrentValue;
@@ -40,7 +42,8 @@ public class ConsumerFactory<T>
         this.schedulePoker = schedulePoker;
         this.options = optionsMonitor.CurrentValue;
 
-        queueName = GetQueueName(this.boundedContext.Name, this.consumerOptions.FanoutMode);
+        queueName = bcRabbitMqNamer.Get_QueueName(typeof(T), this.consumerOptions.FanoutMode);
+        this.bcRabbitMqNamer = bcRabbitMqNamer;
     }
 
     public async Task CreateAndStartConsumersAsync(CancellationToken cancellationToken)
@@ -59,6 +62,27 @@ public class ConsumerFactory<T>
     {
         IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
 
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+        if (subscribersWithDedicatedQueues.Any())
+        {
+            foreach (var subscriber in subscribersWithDedicatedQueues)
+            {
+                string queueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode);
+
+                for (int i = 0; i < consumerOptions.WorkersCount; i++)
+                {
+                    string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}";
+                    IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
+
+                    AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
+
+                    consumers.Add(asyncListener);
+
+                    await asyncListener.StartAsync();
+                }
+            }
+        }
+
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
@@ -73,6 +97,26 @@ public class ConsumerFactory<T>
 
     private async Task CreateAndStartNormalConsumersAsync()
     {
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+        if (subscribersWithDedicatedQueues.Any())
+        {
+            foreach (ISubscriber subscriber in subscribersWithDedicatedQueues)
+            {
+                string queueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode);
+                for (int i = 0; i < consumerOptions.WorkersCount; i++)
+                {
+                    string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}"; // consumer key same as regular or the subscriber.HandlerType?
+                    IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
+
+                    AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
+                    consumers.Add(asyncListener);
+
+                    await asyncListener.StartAsync();
+                }
+            }
+        }
+
+        var theRestOfTheSubscribers = subscriberCollection.Subscribers.Except(subscribersWithDedicatedQueues);
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
@@ -92,11 +136,26 @@ public class ConsumerFactory<T>
         if (isProcessManager)
         {
             bool isSystemProcessManager = typeof(ISystemProcessManager).IsAssignableFrom(typeof(T));
-            bool hasRegisteredProcessManager = allProcessManagers.Items.Where(processManager => typeof(ISystemProcessManager).IsAssignableFrom(processManager) == isSystemProcessManager).Any();
+            IEnumerable<Type> registeredSagas = allProcessManagers.Items.Where(processManager => typeof(ISystemProcessManager).IsAssignableFrom(processManager) == isSystemProcessManager);
+
+            bool hasRegisteredProcessManager = registeredSagas.Any();
             if (hasRegisteredProcessManager)
             {
-                //This should not be awaited here to avoid deadlocks
-                schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);
+                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+                foreach (var subscriber in subscribersWithDedicatedQueues)
+                {
+                    string seperateQueueName = $"{bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode)}.Scheduled";
+                    schedulePoker.PokeAsync(seperateQueueName, cancellationToken).ConfigureAwait(false);
+                }
+
+                bool thereAreAnyRemainig = registeredSagas.Except(subscribersWithDedicatedQueues.Select(x => x.HandlerType)).Any();
+                if (thereAreAnyRemainig)
+                {
+                    string queueNameScheduled = $"{queueName}.Scheduled";
+
+                    //This should not be awaited here to avoid deadlocks
+                    schedulePoker.PokeAsync(queueNameScheduled, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
 
@@ -107,8 +166,16 @@ public class ConsumerFactory<T>
             var allNormalTriggers = allTriggers.Items.Where(justTrigger => typeof(ISystemHandler).IsAssignableFrom(justTrigger) == false);
             if (allNormalTriggers.Any())
             {
+                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = SubscribersWithDedicatedQueuesOnly();
+                foreach (var subscriber in subscribersWithDedicatedQueues)
+                {
+                    string queueName = $"{bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode)}.Scheduled";
+                    schedulePoker.PokeAsync(queueName, cancellationToken).ConfigureAwait(false);
+                }
+
+                string queueNameRegular = $"{queueName}.Scheduled";
                 //This should not be awaited here to avoid deadlocks
-                schedulePoker.PokeAsync(cancellationToken).ConfigureAwait(false);
+                schedulePoker.PokeAsync(queueNameRegular, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -123,16 +190,12 @@ public class ConsumerFactory<T>
         consumers.Clear();
     }
 
-    private string GetQueueName(string boundedContext, bool useFanoutMode = false)
+    private IEnumerable<ISubscriber> SubscribersWithDedicatedQueuesOnly()
     {
-        if (useFanoutMode)
+        foreach (var subscriber in subscriberCollection.Subscribers)
         {
-            return $"{boundedContext}.{typeof(T).Name}.{Environment.MachineName}";
-        }
-        else
-        {
-            string systemMarker = typeof(ISystemHandler).IsAssignableFrom(typeof(T)) ? "inception." : string.Empty;
-            return $"{boundedContext}.{systemMarker}{typeof(T).Name}";
+            if (DedicatedQueueCache.IsDedicatedQueue(subscriber.HandlerType))
+                yield return subscriber;
         }
     }
 }

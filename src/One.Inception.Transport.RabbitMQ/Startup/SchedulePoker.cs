@@ -21,12 +21,10 @@ public class SchedulePoker<T> //where T : IMessageHandler
         this.boundedContext = boundedContext;
     }
 
-    public async Task PokeAsync(CancellationToken cancellationToken)
+    public async Task PokeAsync(string queueName, CancellationToken cancellationToken)
     {
         try
         {
-            string queueName = $"{GetQueueName(boundedContext.CurrentValue.Name)}.Scheduled";
-
             while (cancellationToken.IsCancellationRequested == false)
             {
                 IConnection connection = await connectionResolver.ResolveAsync(queueName, rmqOptionsMonitor.CurrentValue).ConfigureAwait(false);
@@ -57,19 +55,6 @@ public class SchedulePoker<T> //where T : IMessageHandler
     private Task AsyncListener_Received(object sender, BasicDeliverEventArgs @event)
     {
         return Task.CompletedTask;
-    }
-
-    private string GetQueueName(string boundedContext, bool useFanoutMode = false)
-    {
-        if (useFanoutMode)
-        {
-            return $"{boundedContext}.{typeof(T).Name}.{Environment.MachineName}";
-        }
-        else
-        {
-            string systemMarker = typeof(ISystemHandler).IsAssignableFrom(typeof(T)) ? "inception." : string.Empty;
-            return $"{boundedContext}.{systemMarker}{typeof(T).Name}";
-        }
     }
 }
 
