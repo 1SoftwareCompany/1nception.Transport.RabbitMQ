@@ -15,40 +15,32 @@ internal static class DedicatedQueueCache
         if (subscribers is null)
             yield break;
 
-        foreach (var subscriber in subscribers)
+        foreach (ISubscriber subscriber in subscribers)
         {
-            var attr = subscriber.HandlerType
-                .GetCustomAttributes(true).Where(attr => attr is DedicatedQueueAttribute)
-                .SingleOrDefault() as DedicatedQueueAttribute;
+            bool isDedicated = false;
 
-            if (attr is not null)
+            if (typeToSpecialness.TryGetValue(subscriber.HandlerType, out isDedicated) == false)
             {
-                typeToSpecialness.TryAdd(subscriber.HandlerType, true);
+                var attr = subscriber.HandlerType
+                    .GetCustomAttributes(true).Where(attr => attr is DedicatedQueueAttribute)
+                    .SingleOrDefault() as DedicatedQueueAttribute;
+
+                if (attr is not null)
+                {
+                    typeToSpecialness.TryAdd(subscriber.HandlerType, true);
+                    isDedicated = true;
+                }
+                else
+                {
+                    typeToSpecialness.TryAdd(subscriber.HandlerType, false);
+                    isDedicated = false;
+                }
+            }
+
+            if (isDedicated)
+            {
                 yield return subscriber;
             }
-            else
-            {
-                typeToSpecialness.TryAdd(subscriber.HandlerType, false);
-                yield return subscriber;
-            }
-        }
-    }
-
-    private static bool GetAndCacheSpecialnessFromAttribute(Type type)
-    {
-        var attr = type
-            .GetCustomAttributes(true).Where(attr => attr is DedicatedQueueAttribute)
-            .SingleOrDefault() as DedicatedQueueAttribute;
-
-        if (attr is not null)
-        {
-            typeToSpecialness.TryAdd(type, true);
-            return true;
-        }
-        else
-        {
-            typeToSpecialness.TryAdd(type, false);
-            return false;
         }
     }
 }
