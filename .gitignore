@@ -242,3 +242,7 @@ $RECYCLE.BIN/
 
 # Directories which start with '.'
 **/.*/
+!.github/
+
+
+!.github/**
