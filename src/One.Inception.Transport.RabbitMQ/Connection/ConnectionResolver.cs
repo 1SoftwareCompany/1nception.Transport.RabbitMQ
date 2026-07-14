@@ -41,7 +41,7 @@ public class ConnectionResolver : IDisposable
                 while (connection.IsOpen == false)
                 {
                     logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 5 seconds. Key: {connectionKey}", key);
-                    await Task.Delay(5000, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(500, cancellationToken).ConfigureAwait(false);
 
                     if (connection.IsOpen)
                     {
@@ -62,10 +62,9 @@ public class ConnectionResolver : IDisposable
         try
         {
             connection = GetExistingConnection(key);
-            if (connection is not null && connection.IsOpen)
-                return connection;
-
-            connection = await CreateConnectionAsync(key, options).ConfigureAwait(false);
+            if (connection is null)
+                connection = await CreateConnectionAsync(key, options).ConfigureAwait(false);
+            
             return connection;
         }
         finally

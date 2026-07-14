@@ -11,7 +11,7 @@ public class PublicRabbitMqPublisher : RabbitMqPublisherBase<IPublicEvent>
     private readonly IOptionsMonitor<RabbitMqOptions> internalOptionsMonitor;
     private readonly IOptionsMonitor<PublicRabbitMqOptionsCollection> options;
 
-    public PublicRabbitMqPublisher(ISerializer serializer, PublisherChannelResolver channelResolver, IOptionsMonitor<BoundedContext> boundedContextOptionsMonitor, IOptionsMonitor<RabbitMqOptions> internalOptionsMonitor, IOptionsMonitor<PublicRabbitMqOptionsCollection> options, IRabbitMqNamer rabbitMqNamer, IEnumerable<DelegatingPublishHandler> handlers, ILogger<PublicRabbitMqPublisher> logger)
+    public PublicRabbitMqPublisher(ISerializer serializer, ChannelPool channelResolver, IOptionsMonitor<BoundedContext> boundedContextOptionsMonitor, IOptionsMonitor<RabbitMqOptions> internalOptionsMonitor, IOptionsMonitor<PublicRabbitMqOptionsCollection> options, IRabbitMqNamer rabbitMqNamer, IEnumerable<DelegatingPublishHandler> handlers, ILogger<PublicRabbitMqPublisher> logger)
         : base(serializer, channelResolver, rabbitMqNamer, handlers, logger)
     {
         this.currentBoundedContext = boundedContextOptionsMonitor.CurrentValue;

@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
 using One.Inception.Discoveries;
 using One.Inception.Transport.RabbitMQ.Startup;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace One.Inception.Transport.RabbitMQ;
 
@@ -29,5 +29,7 @@ public class RabbitMqConsumerDiscovery : DiscoveryBase<IConsumer<IMessageHandler
         yield return new DiscoveredModel(typeof(RabbitMqInfrastructure), typeof(RabbitMqInfrastructure), ServiceLifetime.Singleton);
 
         yield return new DiscoveredModel(typeof(ConsumerPerQueueChannelResolver), typeof(ConsumerPerQueueChannelResolver), ServiceLifetime.Singleton);
+
+        yield return new DiscoveredModel(typeof(ChannelPool), typeof(ChannelPool), ServiceLifetime.Singleton);
     }
 }

@@ -14,6 +14,9 @@ public class RabbitMqOptions : IRabbitMqOptions
     const string PasswordDefault = "guest";
     const int AdminPortDefault = 5672;
 
+    const int MaxChannelsForPublishDefault = 100;
+    const int TimeoutForChannelLeaseDefault = 300;
+
     public string BoundedContext { get; set; } = BoundedContextDefault;
 
     public string Server { get; set; } = ServerDefault;
@@ -27,6 +30,16 @@ public class RabbitMqOptions : IRabbitMqOptions
     public string Password { get; set; } = PasswordDefault;
 
     public int AdminPort { get; set; } = AdminPortDefault;
+
+    /// <summary>
+    /// Max number of channels that may be created dynamically for publish.
+    /// </summary>
+    public int MaxChannelsForPublish { get; set; } = MaxChannelsForPublishDefault;
+
+    /// <summary>
+    /// Seconds to wait to acquire a lease. Throws exception if this time is exceeded. Deadlock protection
+    /// </summary>
+    public int TimeoutForChannelLease { get; set; } = TimeoutForChannelLeaseDefault;
 
     public string ApiAddress { get; set; }
 

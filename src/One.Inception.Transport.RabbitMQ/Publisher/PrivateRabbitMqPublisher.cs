@@ -9,7 +9,7 @@ public class PrivateRabbitMqPublisher<TMessage> : RabbitMqPublisherBase<TMessage
 {
     private readonly IOptionsMonitor<RabbitMqOptions> optionsMonitor;
 
-    public PrivateRabbitMqPublisher(ISerializer serializer, PublisherChannelResolver channelResolver, ITenantResolver<IMessage> tenantResolver, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<RabbitMqOptions> optionsMonitor, BoundedContextRabbitMqNamer rabbitMqNamer, ILogger<PrivateRabbitMqPublisher<TMessage>> logger, IEnumerable<DelegatingPublishHandler> handlers)
+    public PrivateRabbitMqPublisher(ISerializer serializer, ChannelPool channelResolver, ITenantResolver<IMessage> tenantResolver, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<RabbitMqOptions> optionsMonitor, BoundedContextRabbitMqNamer rabbitMqNamer, ILogger<PrivateRabbitMqPublisher<TMessage>> logger, IEnumerable<DelegatingPublishHandler> handlers)
         : base(serializer, channelResolver, rabbitMqNamer, handlers, logger)
     {
         this.optionsMonitor = optionsMonitor;
