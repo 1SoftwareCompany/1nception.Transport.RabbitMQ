@@ -15,7 +15,7 @@ public class PublisherChannelResolver : ChannelResolverBase // channels per exch
     public override async Task<IChannel> ResolveAsync(string exchange, IRabbitMqOptions options, string boundedContext)
     {
         string channelKey = $"{boundedContext}_{options.GetType().Name}_{exchange}_{options.Server}".ToLower();
-        string connectionKey = $"{options.VHost}_{options.Server}".ToLower();
+        string connectionKey = options.ConnectionKey;
 
         IChannel channel = GetExistingChannel(channelKey);
 
@@ -33,7 +33,7 @@ public class PublisherChannelResolver : ChannelResolverBase // channels per exch
 
             if (channel is null)
             {
-                IConnection connection = await connectionResolver.ResolveAsync(connectionKey, options).ConfigureAwait(false);
+                IConnection connection = await connectionResolver.ResolveAsync(options.ConnectionKey, options).ConfigureAwait(false);
                 IChannel scopedChannel = await CreateModelForPublisherAsync(connection).ConfigureAwait(false);
                 try
                 {

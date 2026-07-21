@@ -1,4 +1,8 @@
-﻿namespace One.Inception.Transport.RabbitMQ;
+﻿using System;
+using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Options;
+
+namespace One.Inception.Transport.RabbitMQ;
 
 public interface IRabbitMqOptions
 {
@@ -13,4 +17,11 @@ public interface IRabbitMqOptions
     public string BoundedContext { get; set; }
     FederatedExchangeOptions FederatedExchange { get; set; }
     IRabbitMqOptions GetOptionsFor(string boundedContext);
+
+    public string ConnectionKey => DefaultConnectionKey(this);
+    protected static string DefaultConnectionKey(IRabbitMqOptions c)
+    {
+        string connectionKey = $"{c.VHost}_{c.Server}".ToLower();
+        return connectionKey;
+    }
 }

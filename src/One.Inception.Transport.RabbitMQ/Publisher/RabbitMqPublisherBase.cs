@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
@@ -11,15 +10,15 @@ namespace One.Inception.Transport.RabbitMQ;
 public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> where TMessage : IMessage
 {
     private readonly ISerializer serializer;
+    private readonly PublisherChannelResolver channelResolver;
     private readonly IRabbitMqNamer rabbitMqNamer;
     private readonly ILogger logger;
-    ChannelPool channelPool;
 
-    public RabbitMqPublisherBase(ISerializer serializer, ChannelPool pool, IRabbitMqNamer rabbitMqNamer, IEnumerable<DelegatingPublishHandler> handlers, ILogger logger)
+    public RabbitMqPublisherBase(ISerializer serializer, PublisherChannelResolver channelResolver, IRabbitMqNamer rabbitMqNamer, IEnumerable<DelegatingPublishHandler> handlers, ILogger logger)
         : base(handlers)
     {
         this.serializer = serializer;
-        this.channelPool = pool;
+        this.channelResolver = channelResolver;
         this.rabbitMqNamer = rabbitMqNamer;
         this.logger = logger;
     }
@@ -72,20 +71,18 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
     {
         try
         {
-            await using ChannelLease lease = await channelPool.RentAsync(options, boundedContext, CancellationToken.None).ConfigureAwait(false);
-            {
-                BasicProperties props = new BasicProperties();
-                props = BuildMessageProperties(props, message);
-                props = AttachHeaders(props, message);
+            IChannel exchangeChannel = await channelResolver.ResolveAsync(exchange, options, boundedContext).ConfigureAwait(false);
+            BasicProperties props = new BasicProperties();
+            props = BuildMessageProperties(props, message);
+            props = AttachHeaders(props, message);
 
-                byte[] body = serializer.SerializeToBytes(message);
-                await lease.Channel.BasicPublishAsync(exchange, string.Empty, false, props, body).ConfigureAwait(false);
+            byte[] body = serializer.SerializeToBytes(message);
+            await exchangeChannel.BasicPublishAsync(exchange, string.Empty, false, props, body).ConfigureAwait(false);
 
-                if (logger.IsEnabled(LogLevel.Debug))
-                    logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
 
-                return new PublishResult(true, true);
-            }
+            return new PublishResult(true, true);
         }
         catch (Exception ex)
         {
