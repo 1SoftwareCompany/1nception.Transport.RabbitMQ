@@ -40,7 +40,7 @@ public abstract class ChannelResolverBase
             {
                 var channelOpts = new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
 
-                IConnection connection = await connectionResolver.ResolveAsync(boundedContext, options).ConfigureAwait(true);
+                IConnection connection = await connectionResolver.ResolveAsync(options).ConfigureAwait(true);
                 IChannel scopedChannel = await connection.CreateChannelAsync(channelOpts).ConfigureAwait(true);
 
                 channels.Add(resolveKey, scopedChannel);

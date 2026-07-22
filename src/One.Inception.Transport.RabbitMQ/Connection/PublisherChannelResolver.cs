@@ -32,7 +32,7 @@ public class PublisherChannelResolver : ChannelResolverBase // channels per exch
 
             if (channel is null)
             {
-                IConnection connection = await connectionResolver.ResolveAsync(options.ConnectionKey, options).ConfigureAwait(false);
+                IConnection connection = await connectionResolver.ResolveAsync(options).ConfigureAwait(false);
                 IChannel scopedChannel = await CreateModelForPublisherAsync(connection).ConfigureAwait(false);
                 try
                 {

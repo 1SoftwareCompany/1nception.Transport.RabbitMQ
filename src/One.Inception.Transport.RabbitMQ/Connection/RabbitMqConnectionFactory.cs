@@ -42,6 +42,7 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
                 connectionFactory.AutomaticRecoveryEnabled = true;
                 connectionFactory.Ssl.Enabled = options.UseSsl;
                 connectionFactory.EndpointResolverFactory = (_) => MultipleEndpointResolver.ComposeEndpointResolver(options);
+                connectionFactory.ClientProvidedName = options.ConnectionKey;
 
                 // Always await within a try/catch to handle possible exceptions
                 IConnection newConnection = await connectionFactory.CreateConnectionAsync();
@@ -62,7 +63,7 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
 
             if (tailRecursion)
                 await Task.Delay(5000);
-            
+
         }
         while (tailRecursion == true);
 

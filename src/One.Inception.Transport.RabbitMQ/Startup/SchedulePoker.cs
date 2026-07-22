@@ -11,16 +11,12 @@ public class SchedulePoker<T> //where T : IMessageHandler
 {
     private readonly IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor;
     private readonly ConnectionResolver connectionResolver;
-    private readonly IOptionsMonitor<BoundedContext> boundedContext;
     AsyncEventingBasicConsumer consumer;
 
-    public const string ConnectionKey = "key_for_scheduled_queues";
-
-    public SchedulePoker(IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor, ConnectionResolver connectionResolver, IOptionsMonitor<BoundedContext> boundedContext)
+    public SchedulePoker(IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor, ConnectionResolver connectionResolver)
     {
         this.rmqOptionsMonitor = rmqOptionsMonitor;
         this.connectionResolver = connectionResolver;
-        this.boundedContext = boundedContext;
     }
 
     public async Task PokeAsync(string queueName, CancellationToken cancellationToken)
@@ -29,7 +25,7 @@ public class SchedulePoker<T> //where T : IMessageHandler
         {
             while (cancellationToken.IsCancellationRequested == false)
             {
-                IConnection connection = await connectionResolver.ResolveAsync(ConnectionKey, rmqOptionsMonitor.CurrentValue).ConfigureAwait(false); // all scheduled queues will share 1 connection
+                IConnection connection = await connectionResolver.ResolveAsync(rmqOptionsMonitor.CurrentValue).ConfigureAwait(false); // all scheduled queues will share 1 connection
 
                 using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
                 {
@@ -59,4 +55,3 @@ public class SchedulePoker<T> //where T : IMessageHandler
         return Task.CompletedTask;
     }
 }
-

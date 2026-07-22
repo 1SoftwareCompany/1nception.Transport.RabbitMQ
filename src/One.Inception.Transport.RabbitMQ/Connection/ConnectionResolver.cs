@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,27 +26,27 @@ public class ConnectionResolver : IDisposable
         this.logger = logger;
     }
 
-    public async Task<IConnection> ResolveAsync(string key, IRabbitMqOptions options, CancellationToken cancellationToken = default)
+    public async Task<IConnection> ResolveAsync(IRabbitMqOptions options, CancellationToken cancellationToken = default)
     {
-        IConnection connection = GetExistingConnection(key);
+        IConnection connection = GetExistingConnection(options.ConnectionKey);
         if (connection is not null)
         {
             if (connection.IsOpen)
                 return connection;
 
-            SemaphoreSlim recoveryGate = gatesForRecoveryWait.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+            SemaphoreSlim recoveryGate = gatesForRecoveryWait.GetOrAdd(options.ConnectionKey, _ => new SemaphoreSlim(1, 1));
             await recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
                 while (connection.IsOpen == false)
                 {
-                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 5 seconds. Key: {connectionKey}", key);
+                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 5 seconds. Key: {connectionKey}", options.ConnectionKey);
                     await Task.Delay(500, cancellationToken).ConfigureAwait(false);
 
                     if (connection.IsOpen)
                     {
-                        logger.LogInformation("Connection to RMQ is open after recovery... Key: {connectionKey}", key);
+                        logger.LogInformation("Connection to RMQ is open after recovery... Key: {connectionKey}", options.ConnectionKey);
                         return connection;
                     }
                 }
@@ -56,15 +57,15 @@ public class ConnectionResolver : IDisposable
             }
         }
 
-        SemaphoreSlim lockPerConnection = gatesPerConnectionKeyCreation.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        SemaphoreSlim lockPerConnection = gatesPerConnectionKeyCreation.GetOrAdd(options.ConnectionKey, _ => new SemaphoreSlim(1, 1));
         await lockPerConnection.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            connection = GetExistingConnection(key);
+            connection = GetExistingConnection(options.ConnectionKey);
             if (connection is null)
-                connection = await CreateConnectionAsync(key, options).ConfigureAwait(false);
-            
+                connection = await CreateConnectionAsync(options).ConfigureAwait(false);
+
             return connection;
         }
         finally
@@ -80,12 +81,12 @@ public class ConnectionResolver : IDisposable
         return connection;
     }
 
-    private async Task<IConnection> CreateConnectionAsync(string key, IRabbitMqOptions options)
+    private async Task<IConnection> CreateConnectionAsync(IRabbitMqOptions options)
     {
         IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options).ConfigureAwait(false);
-        connectionsPerVHost.TryAdd(key, connection);
+        connectionsPerVHost.TryAdd(options.ConnectionKey, connection);
 
-        SubscribeToConnectionEvents(key, connection);
+        SubscribeToConnectionEvents(options.ConnectionKey, connection);
         return connection;
     }
 

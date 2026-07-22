@@ -84,7 +84,7 @@ public sealed class ChannelPool : IAsyncDisposable
             publisherConfirmationTrackingEnabled: true
         );
 
-        IConnection connection = await _connectionResolver.ResolveAsync(bc, options).ConfigureAwait(false);
+        IConnection connection = await _connectionResolver.ResolveAsync(options).ConfigureAwait(false);
         IChannel scopedChannel = await connection.CreateChannelAsync(channelOpts).ConfigureAwait(false);
 
         int count = Interlocked.Increment(ref channelCreatedCount);
