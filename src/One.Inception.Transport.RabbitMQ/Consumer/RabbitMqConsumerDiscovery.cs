@@ -30,6 +30,6 @@ public class RabbitMqConsumerDiscovery : DiscoveryBase<IConsumer<IMessageHandler
 
         yield return new DiscoveredModel(typeof(ConsumerPerQueueChannelResolver), typeof(ConsumerPerQueueChannelResolver), ServiceLifetime.Singleton);
 
-        yield return new DiscoveredModel(typeof(ChannelPool), typeof(ChannelPool), ServiceLifetime.Singleton);
+        //yield return new DiscoveredModel(typeof(ChannelPool), typeof(ChannelPool), ServiceLifetime.Singleton);
     }
 }
