@@ -7,8 +7,7 @@ namespace One.Inception.Transport.RabbitMQ;
 
 public class PublisherChannelResolver : ChannelResolverBase // channels per exchange
 {
-    private static SemaphoreSlim channelThreadGate = new SemaphoreSlim(1); // Instantiate a Singleton of the Semaphore with a value of 1. This means that only 1 thread can be granted access at a time
-
+    private static SemaphoreSlim channelThreadGate = new SemaphoreSlim(1, 1); // Instantiate a Singleton of the Semaphore with a value of 1. This means that only 1 thread can be granted access at a time
 
     public PublisherChannelResolver(ConnectionResolver connectionResolver) : base(connectionResolver) { }
 

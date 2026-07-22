@@ -23,31 +23,11 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         this.logger = logger;
     }
 
-    // Old version where we foreach first around exchange names. It is known to be working
-    //protected override PublishResult PublishInternal(InceptionMessage message)
-    //{
-    //    PublishResult publishResult = PublishResult.Initial;
-
-    //    string boundedContext = message.BoundedContext;
-
-    //    IEnumerable<string> exchanges = GetExistingExchangesNames(message);
-    //    foreach (string exchange in exchanges)
-    //    {
-    //        IEnumerable<IRabbitMqOptions> scopedOptions = GetOptionsFor(message);
-    //        foreach (IRabbitMqOptions scopedOpt in scopedOptions)
-    //        {
-    //            publishResult &= Publish(message, boundedContext, exchange, scopedOpt);
-    //        }
-    //    }
-
-    //    return publishResult;
-    //}
-
     protected override async Task<PublishResult> PublishInternalAsync(InceptionMessage message)
     {
         PublishResult publishResult = PublishResult.Initial;
 
-        string boundedContext = message.BoundedContext;
+        string publishToBoundedContext = message.BoundedContext;
 
         IEnumerable<string> exchanges = GetExistingExchangesNames(message);
 
@@ -57,7 +37,7 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         {
             foreach (string exchange in exchanges)
             {
-                PublishResult resultNow = await PublishAsync(message, boundedContext, exchange, scopedOpt).ConfigureAwait(false);
+                PublishResult resultNow = await PublishAsync(message, publishToBoundedContext, exchange, scopedOpt).ConfigureAwait(false);
                 publishResult &= resultNow;
             }
         }
@@ -67,11 +47,11 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
 
     protected abstract IEnumerable<IRabbitMqOptions> GetOptionsFor(InceptionMessage message);
 
-    private async Task<PublishResult> PublishAsync(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions options)
+    private async Task<PublishResult> PublishAsync(InceptionMessage message, string publishToBoundedContext, string exchange, IRabbitMqOptions options)
     {
         try
         {
-            IChannel exchangeChannel = await channelResolver.ResolveAsync(exchange, options, boundedContext).ConfigureAwait(false);
+            IChannel exchangeChannel = await channelResolver.ResolveAsync(exchange, options, publishToBoundedContext).ConfigureAwait(false);
             BasicProperties props = new BasicProperties();
             props = BuildMessageProperties(props, message);
             props = AttachHeaders(props, message);
