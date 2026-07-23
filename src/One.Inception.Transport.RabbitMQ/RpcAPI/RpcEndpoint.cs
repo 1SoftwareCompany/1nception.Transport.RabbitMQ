@@ -128,6 +128,9 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
                         IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, destinationBC).ConfigureAwait(false);
                         client = new ResponseConsumer<TRequest, TResponse>(route, requestChannel, serializer, logger);
                         await client.StartAsync().ConfigureAwait(false);
+
+                        if (logger.IsEnabled(LogLevel.Information))
+                            logger.LogInformation("{rmqrpcworkerscount} RPC response consumers started for {route}.", consumerOptions.RpcWorkersCount, route);
                     }
                     else
                     {
