@@ -82,10 +82,12 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
         try
         {
             IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
-            IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, options.VHost).ConfigureAwait(false);
 
             for (int workerNumber = 0; workerNumber < consumerOptions.RpcWorkersCount; workerNumber++)
             {
+                string workerChannelKey = $"{route}_{workerNumber}";
+                IChannel requestChannel = await channelResolver.ResolveAsync(workerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
+
                 server = new RequestConsumer<TRequest, TResponse>(route, requestChannel, factory, serializer, serviceProvider, logger);
                 await server.StartAsync().ConfigureAwait(false);
             }
