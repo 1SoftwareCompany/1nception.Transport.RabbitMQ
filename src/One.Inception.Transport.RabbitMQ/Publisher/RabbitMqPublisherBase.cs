@@ -65,12 +65,11 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
 
             }).ConfigureAwait(false);
 
-            return new PublishResult(true, result);
+            return new PublishResult(true, result); // is this correct?
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange);
-
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
             return PublishResult.Failed;
         }
     }

@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 
@@ -10,18 +10,24 @@ namespace One.Inception.Transport.RabbitMQ;
 
 public class PublisherChannelResolver
 {
+    private readonly ConnectionResolver connectionResolver;
+    private readonly ILogger<PublisherChannelResolver> logger;
+
     private readonly ConcurrentDictionary<string, ConcurrentBag<IChannel>> connectionsWithChannels;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> connectionsWithSlots;
-    private readonly ConnectionResolver connectionResolver;
+    private readonly ConcurrentDictionary<string, IChannel> declaredExchanges;
 
-    public PublisherChannelResolver(ConnectionResolver connectionResolver)
+    public PublisherChannelResolver(ConnectionResolver connectionResolver, ILogger<PublisherChannelResolver> logger)
     {
+        this.connectionResolver = connectionResolver;
+        this.logger = logger;
+
         connectionsWithChannels = new ConcurrentDictionary<string, ConcurrentBag<IChannel>>();
         connectionsWithSlots = new ConcurrentDictionary<string, SemaphoreSlim>();
-        this.connectionResolver = connectionResolver;
+        declaredExchanges = new ConcurrentDictionary<string, IChannel>();
     }
 
-    public async Task<bool> UseChannelAsync(string exchange, IRabbitMqOptions options, string boundedContext, Action<IChannel> publish)
+    public async Task<bool> UseChannelAsync(string exchange, IRabbitMqOptions options, string boundedContext, Func<IChannel, Task> publish)
     {
         IChannel channel = default;
         try
@@ -36,31 +42,39 @@ public class PublisherChannelResolver
                 connectionsWithSlots.TryAdd(options.ConnectionKey, slotsLock);
             }
 
-            channel = await RentAsync(options);
+            channel = await RentAsync(options, exchange);
 
             try
             {
                 if (string.IsNullOrEmpty(exchange) == false)
                 {
-                    await channel.ExchangeDeclarePassiveAsync(exchange).ConfigureAwait(true);
+                    string key = $"{boundedContext}_{exchange}_{options.Server}".ToLower();
+                    if (declaredExchanges.TryGetValue(key, out _) == false)
+                    {
+                        await channel.ExchangeDeclarePassiveAsync(exchange).ConfigureAwait(true); // It will do nothing if the exchange already exists and result in a channel-level protocol exception (channel closure) if not.
+
+                        declaredExchanges.TryAdd(key, channel);
+                    }
                 }
+
             }
             catch (OperationInterruptedException)
             {
                 throw;
-                // I have no idea why this code was here.
+                // I have no idea why this code was here. updated: see comment on line 131. if the exchange does not exist, it throws -> and the catch clause dynamically declares the exchange. this ensures that the messages will at least not be gone
                 //scopedChannel.Dispose();
                 //scopedChannel = CreateModelForPublisher(connection);
                 //scopedChannel.ExchangeDeclare(exchange, PipelineType.Headers.ToString(), true);
             }
 
-            publish(channel);
-
+            await publish(channel);
 
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            logger.LogError(ex, "Failure during acquiring a channel for publish... Published message to exchange {exchange} has FAILED.", exchange);
+
             return false;
         }
         finally
@@ -80,46 +94,43 @@ public class PublisherChannelResolver
             {
                 idleChannels.Add(channel);
             }
-            else
-            {
-                connectionsWithChannels.TryAdd(options.ConnectionKey, new ConcurrentBag<IChannel>());
-            }
         }
         finally
         {
-            if (connectionsWithSlots.TryGetValue(options.ConnectionKey, out SemaphoreSlim _slotsLock))
+            if (connectionsWithSlots.TryGetValue(options.ConnectionKey, out SemaphoreSlim slotsLock))
             {
-                _slotsLock.Release();
+                slotsLock.Release();
             }
         }
     }
 
-    private async Task<IChannel> RentAsync(IRabbitMqOptions options)
+    private async Task<IChannel> RentAsync(IRabbitMqOptions options, string exchange)
     {
-        connectionsWithSlots.TryGetValue(options.ConnectionKey, out SemaphoreSlim _slotsLock);
+        connectionsWithSlots.TryGetValue(options.ConnectionKey, out SemaphoreSlim slotsLock);
 
-        bool lockIsAcquired = await _slotsLock.WaitAsync(TimeSpan.FromSeconds(options.TimeoutForChannelLease)).ConfigureAwait(false);
+        bool lockIsAcquired = await slotsLock.WaitAsync(TimeSpan.FromSeconds(options.TimeoutForChannelLease)).ConfigureAwait(false);
         if (lockIsAcquired == false)
         {
-            //_logger.LogError("Timed out publishing after {timeout}s waiting. Pool is exhausted. Live channel count: {channelCount}.", _defaultWaitTimeout.TotalSeconds, Volatile.Read(ref channelCreatedCount));
+            //_logger.LogError("Timed out publishing after {timeout}s waiting. Pool is exhausted. Live channel count: {channelCount}.", options.TimeoutForChannelLease, Volatile.Read(ref channelCreatedCount));
             throw new TimeoutException($"No channel available for publish for {options.TimeoutForChannelLease}s");
         }
         else
         {
             try
             {
-                IChannel channel = await TakeHealthyOrCreateAsync(options).ConfigureAwait(false);
+                IChannel channel = await TakeHealthyOrCreateAsync(options, exchange).ConfigureAwait(false);
+
                 return channel;
             }
             catch
             {
-                _slotsLock.Release();
+                slotsLock.Release();
                 throw;
             }
         }
     }
 
-    private async Task<IChannel> TakeHealthyOrCreateAsync(IRabbitMqOptions options)
+    private async Task<IChannel> TakeHealthyOrCreateAsync(IRabbitMqOptions options, string exchange)
     {
         if (connectionsWithChannels.TryGetValue(options.ConnectionKey, out ConcurrentBag<IChannel> idleChannels))
         {
