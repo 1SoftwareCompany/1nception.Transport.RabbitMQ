@@ -29,10 +29,6 @@ public interface IRabbitMqOptions
     int TimeoutForChannelLease { get; set; }
 
 
-    public string ConnectionKey => DefaultConnectionKey(this);
-    protected static string DefaultConnectionKey(IRabbitMqOptions c)
-    {
-        string connectionKey = $"{c.VHost}_{c.Server}".ToLower();
-        return connectionKey;
-    }
+    public string ConnectionKey { get; }
+
 }

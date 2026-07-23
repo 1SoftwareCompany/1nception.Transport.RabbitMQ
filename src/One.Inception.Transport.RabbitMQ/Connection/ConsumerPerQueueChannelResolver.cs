@@ -1,7 +1,8 @@
-﻿using System.Collections.Generic;
+﻿using RabbitMQ.Client;
+using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
-using RabbitMQ.Client;
 
 namespace One.Inception.Transport.RabbitMQ;
 
@@ -33,6 +34,8 @@ public class ConsumerPerQueueChannelResolver : IChannelResolverBase // channels 
             if (channel?.IsClosed == true)
             {
                 channels.Remove(resolveKey);
+                await channel.CloseAsync().ConfigureAwait(false);
+                await channel.DisposeAsync().ConfigureAwait(false);
                 channel = null;
             }
 

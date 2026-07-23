@@ -61,6 +61,14 @@ public class RabbitMqOptions : IRabbitMqOptions
 
         return this;
     }
+
+    private string _connectionKey;
+    public string ConnectionKey => _connectionKey ?? BuildConnectionKey();
+    private string BuildConnectionKey()
+    {
+        _connectionKey = $"{VHost}_{Server}".ToLower();
+        return _connectionKey;
+    }
 }
 
 public class RabbitMqOptionsProvider : InceptionOptionsProviderBase<RabbitMqOptions>

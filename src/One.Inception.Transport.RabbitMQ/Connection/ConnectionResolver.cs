@@ -26,7 +26,7 @@ public class ConnectionResolver : IDisposable
 
     public async Task<IConnection> ResolveAsync(IRabbitMqOptions options, CancellationToken cancellationToken = default)
     {
-        IConnection connection = GetExistingConnection(options.ConnectionKey);
+        IConnection connection = GetExistingConnection(options);
         if (connection is not null)
         {
             if (connection.IsOpen)
@@ -60,7 +60,7 @@ public class ConnectionResolver : IDisposable
 
         try
         {
-            connection = GetExistingConnection(options.ConnectionKey);
+            connection = GetExistingConnection(options);
             if (connection is null)
                 connection = await CreateConnectionAsync(options).ConfigureAwait(false);
 
@@ -72,9 +72,9 @@ public class ConnectionResolver : IDisposable
         }
     }
 
-    private IConnection GetExistingConnection(string key)
+    private IConnection GetExistingConnection(IRabbitMqOptions options)
     {
-        connectionsPerVHost.TryGetValue(key, out IConnection connection);
+        connectionsPerVHost.TryGetValue(options.ConnectionKey, out IConnection connection);
 
         return connection;
     }

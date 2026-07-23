@@ -93,6 +93,9 @@ public class PublisherChannelResolver
             if (connectionsWithChannels.TryGetValue(options.ConnectionKey, out ConcurrentBag<IChannel> idleChannels))
             {
                 idleChannels.Add(channel);
+
+                if (logger.IsEnabled(LogLevel.Debug))
+                    logger.LogDebug($"Return channel => {options.ConnectionKey} {connectionsWithChannels.Count}/{connectionsWithSlots[options.ConnectionKey].CurrentCount}");
             }
         }
         finally
@@ -178,6 +181,8 @@ public class PublisherChannelResolver
     {
         var connection = await connectionResolver.ResolveAsync(options).ConfigureAwait(false);
         var channelOpts = new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug($"Create channel => {options.ConnectionKey} {connectionsWithChannels.Count}/{connectionsWithSlots[options.ConnectionKey].CurrentCount}");
 
         return await connection.CreateChannelAsync(channelOpts);
     }
