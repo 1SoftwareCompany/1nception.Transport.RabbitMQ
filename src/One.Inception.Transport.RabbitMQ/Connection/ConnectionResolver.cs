@@ -64,6 +64,9 @@ public class ConnectionResolver : IDisposable
             if (connection is null)
                 connection = await CreateConnectionAsync(options).ConfigureAwait(false);
 
+            if (connection is null)
+                throw new InvalidOperationException("Failed to create or retrieve a RabbitMQ connection.");
+
             return connection;
         }
         finally
@@ -82,10 +85,17 @@ public class ConnectionResolver : IDisposable
     private async Task<IConnection> CreateConnectionAsync(IRabbitMqOptions options)
     {
         IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options).ConfigureAwait(false);
-        connectionsPerVHost.TryAdd(options.ConnectionKey, connection);
+        if (connectionsPerVHost.TryAdd(options.ConnectionKey, connection))
+        {
+            SubscribeToConnectionEvents(options.ConnectionKey, connection);
+            return connection;
+        }
+        else
+        {
+            await connection.CloseAsync().ConfigureAwait(false);
 
-        SubscribeToConnectionEvents(options.ConnectionKey, connection);
-        return connection;
+            return GetExistingConnection(options);
+        }
     }
 
     private void SubscribeToConnectionEvents(string key, IConnection connection)
