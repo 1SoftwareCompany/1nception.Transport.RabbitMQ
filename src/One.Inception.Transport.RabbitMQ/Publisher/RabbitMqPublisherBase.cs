@@ -51,23 +51,25 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
     {
         try
         {
-            IChannel exchangeChannel = await channelResolver.ResolveAsync(exchange, options, publishToBoundedContext).ConfigureAwait(false);
-            BasicProperties props = new BasicProperties();
-            props = BuildMessageProperties(props, message);
-            props = AttachHeaders(props, message);
+            bool result = await channelResolver.UseChannelAsync(exchange, options, publishToBoundedContext, async channel =>
+            {
+                BasicProperties props = new BasicProperties();
+                props = BuildMessageProperties(props, message);
+                props = AttachHeaders(props, message);
 
-            byte[] body = serializer.SerializeToBytes(message);
-            await exchangeChannel.BasicPublishAsync(exchange, string.Empty, false, props, body).ConfigureAwait(false);
+                byte[] body = serializer.SerializeToBytes(message);
+                await channel.BasicPublishAsync(exchange, string.Empty, false, props, body).ConfigureAwait(false);
 
-            if (logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
+                if (logger.IsEnabled(LogLevel.Debug))
+                    logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
 
-            return new PublishResult(true, true);
+            }).ConfigureAwait(false);
+
+            return new PublishResult(true, result); // is this correct?
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange);
-
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
             return PublishResult.Failed;
         }
     }

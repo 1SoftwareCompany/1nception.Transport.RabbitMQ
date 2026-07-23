@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using One.Inception.Userfull;
 using RabbitMQ.Client;
 
 namespace One.Inception.Transport.RabbitMQ.Publisher;
@@ -68,51 +69,67 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
 
     private async Task<PublishResult> PublishInternallyAsync(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions internalOptions)
     {
-        IChannel exchangeModel = await channelResolver.ResolveAsync(exchange, internalOptions, boundedContext).ConfigureAwait(false);
+        try
+        {
+            bool result = await channelResolver.UseChannelAsync(exchange, internalOptions, boundedContext, async channel =>
+            {
+                BasicProperties props = new BasicProperties();
+                props = BuildMessageProperties(props, message);
+                props = BuildInternalHeaders(props, message);
 
-        BasicProperties props = new BasicProperties();
-        props = BuildMessageProperties(props, message);
-        props = BuildInternalHeaders(props, message);
+                var result = await PublishUsingChannelAsync(message, exchange, channel, props).ConfigureAwait(false);
 
-        return await PublishUsingChannelAsync(message, exchange, exchangeModel, props).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+
+            return new PublishResult(true, result); // is this correct?
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
+            return PublishResult.Failed;
+        }
     }
 
     private async Task<PublishResult> PublishPublicallyAsync(InceptionMessage message, string boundedContext, string exchange, IEnumerable<IRabbitMqOptions> scopedOptions)
     {
-        PublishResult publishResult = PublishResult.Initial;
-
-        foreach (var opt in scopedOptions)
+        try
         {
-            IChannel exchangeModel = await channelResolver.ResolveAsync(exchange, opt, boundedContext).ConfigureAwait(false);
+            PublishResult publishResult = PublishResult.Initial;
 
-            //IBasicProperties props = exchangeModel.CreateBasicProperties();
-            BasicProperties props = new BasicProperties();
-            props = BuildMessageProperties(props, message);
-            props = BuildPublicHeaders(props, message);
+            foreach (var opt in scopedOptions)
+            {
+                bool publishSuccess = await channelResolver.UseChannelAsync(exchange, opt, boundedContext, async channel =>
+                {
+                    //IBasicProperties props = exchangeModel.CreateBasicProperties();
+                    BasicProperties props = new BasicProperties();
+                    props = BuildMessageProperties(props, message);
+                    props = BuildPublicHeaders(props, message);
 
-            publishResult &= await PublishUsingChannelAsync(message, exchange, exchangeModel, props).ConfigureAwait(false);
+                    publishResult &= await PublishUsingChannelAsync(message, exchange, channel, props).ConfigureAwait(false);
+
+                }).ConfigureAwait(false);
+
+                if (publishSuccess == false)
+                    publishResult &= new PublishResult(true, false);
+            }
+
+            return publishResult;
         }
-
-        return publishResult;
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
+            return PublishResult.Failed;
+        }
     }
 
     private async Task<PublishResult> PublishUsingChannelAsync(InceptionMessage message, string exchange, IChannel exchangeModel, BasicProperties properties)
     {
-        try
-        {
-            byte[] body = serializer.SerializeToBytes(message);
-            await exchangeModel.BasicPublishAsync(exchange, string.Empty, false, properties, body).ConfigureAwait(false);
+        byte[] body = serializer.SerializeToBytes(message);
+        await exchangeModel.BasicPublishAsync(exchange, string.Empty, false, properties, body).ConfigureAwait(false);
 
-            logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, properties.Headers);
+        logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, properties.Headers);
 
-            return new PublishResult(true, true);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange);
-
-            return PublishResult.Failed;
-        }
+        return new PublishResult(true, true);
     }
 
     private BasicProperties BuildMessageProperties(BasicProperties properties, InceptionMessage message)

@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -41,7 +39,7 @@ public class ConnectionResolver : IDisposable
             {
                 while (connection.IsOpen == false)
                 {
-                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 5 seconds. Key: {connectionKey}", options.ConnectionKey);
+                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 500 ms. Key: {connectionKey}", options.ConnectionKey);
                     await Task.Delay(500, cancellationToken).ConfigureAwait(false);
 
                     if (connection.IsOpen)
