@@ -20,6 +20,8 @@ public class PublicRabbitMqOptions : IRabbitMqOptions
     const string UsernameDefault = "guest";
     const string PasswordDefault = "guest";
     const int AdminPortDefault = 5672;
+    const int MaxChannelsForPublishDefault = 10;
+    const int TimeoutForChannelLeaseDefault = 300;
 
     private string server = ServerDefault;
     private string vHost = VHostDefault;
@@ -40,6 +42,9 @@ public class PublicRabbitMqOptions : IRabbitMqOptions
     public int AdminPort { get; set; } = AdminPortDefault;
 
     public string ApiAddress { get; set; }
+
+    public int MaxChannelsForPublish { get; set; } = MaxChannelsForPublishDefault;
+    public int TimeoutForChannelLease { get; set; } = TimeoutForChannelLeaseDefault;
 
     // [Required]
     public string BoundedContext { get => boundedContext; set => boundedContext = value?.ToLower(); }

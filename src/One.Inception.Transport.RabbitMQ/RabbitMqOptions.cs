@@ -13,6 +13,8 @@ public class RabbitMqOptions : IRabbitMqOptions
     const string UsernameDefault = "guest";
     const string PasswordDefault = "guest";
     const int AdminPortDefault = 5672;
+    const int MaxChannelsForPublishDefault = 10;
+    const int TimeoutForChannelLeaseDefault = 300;
 
     public string BoundedContext { get; set; } = BoundedContextDefault;
 
@@ -29,6 +31,9 @@ public class RabbitMqOptions : IRabbitMqOptions
     public int AdminPort { get; set; } = AdminPortDefault;
 
     public string ApiAddress { get; set; }
+
+    public int MaxChannelsForPublish { get; set; } = MaxChannelsForPublishDefault;
+    public int TimeoutForChannelLease { get; set; } = TimeoutForChannelLeaseDefault;
 
     public FederatedExchangeOptions FederatedExchange { get; set; }
 

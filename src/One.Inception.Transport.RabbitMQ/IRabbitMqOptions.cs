@@ -21,12 +21,12 @@ public interface IRabbitMqOptions
     /// <summary>
     /// Max number of channels that may be created dynamically for publish.
     /// </summary>
-    int MaxChannelsForPublish => 100;
+    int MaxChannelsForPublish { get; set; }
 
     /// <summary>
     /// Seconds to wait to acquire a lease. Throws exception if this time is exceeded. Deadlock protection
     /// </summary>
-    int TimeoutForChannelLease => 300;
+    int TimeoutForChannelLease { get; set; }
 
 
     public string ConnectionKey => DefaultConnectionKey(this);
