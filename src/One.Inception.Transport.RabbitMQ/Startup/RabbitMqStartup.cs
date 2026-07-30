@@ -43,11 +43,17 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
         regularQueueName = bcRabbitMqNamer.Get_QueueName(type, consumerOptions.CurrentValue.FanoutMode);
 
+        consumerOptions.OnChange(async newOptions =>
+        {
+            if (logger.IsEnabled(LogLevel.Debug))
+                this.logger.LogDebug("Tenant options re-loaded with {@options}", newOptions);
+        });
+
         tenantsOptionsMonitor.OnChange(async newOptions =>
         {
             if (logger.IsEnabled(LogLevel.Debug))
                 this.logger.LogDebug("Tenant options re-loaded with {@options}", newOptions);
-            
+
             tenantsOptions = newOptions;
 
             using (IConnection connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))

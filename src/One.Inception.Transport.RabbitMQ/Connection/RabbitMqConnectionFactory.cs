@@ -7,8 +7,25 @@ using RabbitMQ.Client.Exceptions;
 
 namespace One.Inception.Transport.RabbitMQ;
 
+/// <summary>
+/// https://www.rabbitmq.com/client-libraries/dotnet-api-guide#connection-recovery
+/// </summary>
+internal static class KillBill
+{
+    internal static ushort MaxPublishRetries = 5;
+    internal static TimeSpan RecoveryInterval = TimeSpan.FromSeconds(5);
+    internal static TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Calculated recovery timeout based on the heartbeat timeout and recovery interval multiplied by the maximum publish retries.
+    /// Keep it that way instead of configuring a value.
+    /// </summary>
+    internal static TimeSpan TotalRecoveryTimeout = HeartbeatTimeout + RecoveryInterval * MaxPublishRetries;
+}
+
 public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory where TOptions : IRabbitMqOptions
 {
+
     private readonly ILogger<RabbitMqConnectionFactory<TOptions>> logger;
     private readonly TOptions options;
 
@@ -48,6 +65,10 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
                 IConnection newConnection = await connectionFactory.CreateConnectionAsync();
                 if (logger.IsEnabled(LogLevel.Information))
                     logger.LogInformation("Successfully created RabbitMQ connection using options {@options}", options);
+
+                KillBill.RecoveryInterval = connectionFactory.NetworkRecoveryInterval;
+                KillBill.HeartbeatTimeout = connectionFactory.RequestedHeartbeat;
+
 
                 return newConnection;
             }

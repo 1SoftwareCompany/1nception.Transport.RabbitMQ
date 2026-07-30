@@ -84,9 +84,20 @@ public class ConnectionResolver : IDisposable
 
     private async Task<IConnection> CreateConnectionAsync(IRabbitMqOptions options)
     {
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            string connectionPoolInfo = $"Connection Pool Info: {string.Join(", ", connectionsPerVHost.Keys)}";
+            logger.LogDebug(connectionPoolInfo);
+        }
+
         IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options).ConfigureAwait(false);
         if (connectionsPerVHost.TryAdd(options.ConnectionKey, connection))
         {
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                string connectionPoolInfo = $"Connection Pool Info: {string.Join(", ", connectionsPerVHost.Keys)}";
+                logger.LogDebug(connectionPoolInfo);
+            }
             SubscribeToConnectionEvents(options.ConnectionKey, connection);
             return connection;
         }

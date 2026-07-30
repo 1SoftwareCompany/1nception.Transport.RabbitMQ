@@ -20,7 +20,7 @@ public class PublicRabbitMqOptions : IRabbitMqOptions
     const string UsernameDefault = "guest";
     const string PasswordDefault = "guest";
     const int AdminPortDefault = 5672;
-    const int MaxChannelsForPublishDefault = 10;
+    const int MaxChannelsForPublishDefault = 1024;
     const int TimeoutForChannelLeaseDefault = 300;
 
     private string server = ServerDefault;

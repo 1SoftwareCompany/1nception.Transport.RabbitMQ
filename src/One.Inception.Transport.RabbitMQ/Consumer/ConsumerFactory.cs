@@ -127,7 +127,6 @@ public class ConsumerFactory<T>
 
             await asyncListener.StartAsync();
         }
-
     }
 
     private async Task CreateAndStartSchedulePokerAsync(CancellationToken cancellationToken)

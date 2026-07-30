@@ -1,11 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using One.Inception.Userfull;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Publisher;
 
@@ -96,18 +98,18 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         {
             PublishResult publishResult = PublishResult.Initial;
 
-            foreach (var opt in scopedOptions)
+            foreach (IRabbitMqOptions opt in scopedOptions)
             {
                 bool publishSuccess = await channelResolver.UseChannelAsync(exchange, opt, boundedContext, async channel =>
-                {
-                    //IBasicProperties props = exchangeModel.CreateBasicProperties();
-                    BasicProperties props = new BasicProperties();
-                    props = BuildMessageProperties(props, message);
-                    props = BuildPublicHeaders(props, message);
+                    {
+                        //IBasicProperties props = exchangeModel.CreateBasicProperties();
+                        BasicProperties props = new BasicProperties();
+                        props = BuildMessageProperties(props, message);
+                        props = BuildPublicHeaders(props, message);
 
-                    publishResult &= await PublishUsingChannelAsync(message, exchange, channel, props).ConfigureAwait(false);
+                        publishResult &= await PublishUsingChannelAsync(message, exchange, channel, props).ConfigureAwait(false);
 
-                }).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
 
                 if (publishSuccess == false)
                     publishResult &= new PublishResult(true, false);
@@ -115,6 +117,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
 
             return publishResult;
         }
+
         catch (Exception ex)
         {
             logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
