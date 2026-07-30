@@ -1,6 +1,4 @@
 ﻿using RabbitMQ.Client;
-using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ;

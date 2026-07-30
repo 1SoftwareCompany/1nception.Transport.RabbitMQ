@@ -1,12 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using One.Inception.Userfull;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Exceptions;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Publisher;

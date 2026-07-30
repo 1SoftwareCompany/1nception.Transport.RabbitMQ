@@ -1,8 +1,4 @@
-﻿using System;
-using System.ComponentModel.DataAnnotations;
-using Microsoft.Extensions.Options;
-
-namespace One.Inception.Transport.RabbitMQ;
+﻿namespace One.Inception.Transport.RabbitMQ;
 
 public interface IRabbitMqOptions
 {
