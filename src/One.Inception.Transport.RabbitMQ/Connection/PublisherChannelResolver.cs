@@ -11,7 +11,6 @@ namespace One.Inception.Transport.RabbitMQ;
 
 public class PublisherChannelResolver
 {
-    private readonly IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions;
     private readonly ConnectionResolver connectionResolver;
     private readonly ILogger<PublisherChannelResolver> logger;
 
@@ -19,9 +18,8 @@ public class PublisherChannelResolver
     private readonly ConcurrentDictionary<string, SemaphoreSlim> connectionsWithSlots;
     private readonly ConcurrentDictionary<string, IChannel> declaredExchanges;
 
-    public PublisherChannelResolver(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, ConnectionResolver connectionResolver, ILogger<PublisherChannelResolver> logger)
+    public PublisherChannelResolver(ConnectionResolver connectionResolver, ILogger<PublisherChannelResolver> logger)
     {
-        this.consumerOptions = consumerOptions;
         this.connectionResolver = connectionResolver;
         this.logger = logger;
 
@@ -71,7 +69,6 @@ public class PublisherChannelResolver
                 await Task.Delay(KillBill.RecoveryInterval).ConfigureAwait(false);
 
             channel = await RentAsync(options, exchange);
-            consumerOptions.CurrentValue.WorkersCount = 100;
             await publish(channel);
 
             return true;
