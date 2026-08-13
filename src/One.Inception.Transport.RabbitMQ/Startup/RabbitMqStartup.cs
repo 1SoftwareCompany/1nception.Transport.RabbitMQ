@@ -164,6 +164,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
     {
         try
         {
+
             List<string> removedTenants = previousTenants.Except(newTenantsOptions).ToList();
             List<string> newlyAddedTenants = newTenantsOptions.Except(previousTenants).ToList();
 
@@ -178,7 +179,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
                     if (removedTenants.Count > 0)
                     {
-                        await RemoveObsoleteBindingsFromRemovedTenants(specialQueueName, channel, [subscriber], removedTenants); // unbind the tenant that was removed from configuration
+                        await RemoveObsoleteBindingsFromRemovedTenants(specialQueueName, channel, [subscriber], removedTenants).ConfigureAwait(false); // unbind the tenant that was removed from configuration
                     }
                     if (newlyAddedTenants.Count > 0)
                     {
@@ -190,7 +191,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
                 if (removedTenants.Count > 0)
                 {
-                    await RemoveObsoleteBindingsFromRemovedTenants(regularQueueName, channel, theRestOfTheSubscribers, removedTenants); // unbind the tenant that was removed from configuration
+                    await RemoveObsoleteBindingsFromRemovedTenants(regularQueueName, channel, theRestOfTheSubscribers, removedTenants).ConfigureAwait(false); // unbind the tenant that was removed from configuration
                 }
                 if (newlyAddedTenants.Count > 0)
                 {
@@ -206,8 +207,6 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
     private async Task RemoveObsoleteBindingsFromRemovedTenants(string queueName, IChannel channel, IEnumerable<ISubscriber> subscribers, List<string> removedTenants)
     {
-        IEnumerable<string> exchangesToDeclare = queueBindingArgumentsFactory.GetExchangesToDeclare(subscribers, isSystemQueue);
-
         bool isProcessManagerQueue = typeof(T).Name.Equals(typeof(IProcessManager).Name) || typeof(T).Name.Equals(typeof(ISystemProcessManager).Name);
         bool isTriggerQueue = typeof(T).Name.Equals(typeof(ITrigger).Name);
         bool isIEventStoreIndex = typeof(T).Name.Equals(typeof(IEventStoreIndex).Name);
@@ -224,7 +223,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
                 throw new Exception($"There are more than one exchanges defined for {typeof(T).Name}. RabbitMQ does not allow this functionality and you need to fix one or more of the following subscribers:{Environment.NewLine}{string.Join(Environment.NewLine, subscribers.Select(sub => sub.Id))}");
             }
 
-            thereIsAScheduledQueue = true;
+            thereIsAScheduledQueue = exchangesThatQueueMustBindTo.Count == 1;
         }
         if (isTriggerQueue && exchangesThatQueueMustBindTo.Count > 0)
         {

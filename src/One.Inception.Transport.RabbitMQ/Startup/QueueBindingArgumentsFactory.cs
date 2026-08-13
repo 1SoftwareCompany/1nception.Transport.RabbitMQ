@@ -65,6 +65,9 @@ public class QueueBindingArgumentsFactory
                 string contractId = msgType.GetContractId();
                 string bc = msgType.GetBoundedContext(boundedContext.Name);
 
+                if (bc.Equals(boundedContext.Name, StringComparison.OrdinalIgnoreCase) == false && isSystemQueue)
+                    throw new Exception($"The message {msgType.Name} has a bounded context {bc} which is different than the configured {boundedContext.Name}.");
+
                 bool isPublicEventForIndex = isIEventStoreIndex && typeof(IPublicEvent).IsAssignableFrom(msgType); // public event that needs to be handled in index, so we need public bindings with prefixed tenant
                 bool isFromAnotherBoundedContext = bc.Equals(boundedContext.Name, StringComparison.OrdinalIgnoreCase) == false;
 
