@@ -1,11 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using One.Inception.Transport.RabbitMQ.Management.Model;
 
@@ -111,7 +113,6 @@ public sealed class RabbitMqManagementClient : IDisposable
         return await GetAsync<IEnumerable<Vhost>>("vhosts").ConfigureAwait(false);
     }
 
-
     public async Task CreatePermissionAsync(PermissionInfo permissionInfo)
     {
         if (permissionInfo is null) throw new ArgumentNullException("permissionInfo");
@@ -150,6 +151,41 @@ public sealed class RabbitMqManagementClient : IDisposable
         await PutAsync($"users/{username}", userInfo).ConfigureAwait(false);
 
         return await GetUserAsync(userInfo.GetName()).ConfigureAwait(false);
+    }
+
+    internal async Task<IEnumerable<Binding>> GetAllBindingsForExchange(string vHostName, string exchangeName) //api/queues/unicom-subscriptions/subscriptions.IEventStoreIndex/bindings
+    {
+        string vhost = SanitiseVhostName(vHostName);
+
+        //api/queues/unicom-subscriptions/subscriptions.IEventStoreIndex/bindingsd
+        return await GetAsync<IEnumerable<Binding>>(string.Format("exchanges/{0}/{1}/bindings/source", vhost, exchangeName)).ConfigureAwait(false);
+    }
+
+    internal async Task<IEnumerable<Exchange>> GetExchangesForVHost(string vHostName) //api/queues/unicom-subscriptions/subscriptions.IEventStoreIndex/bindings
+    {
+        string vhost = SanitiseVhostName(vHostName);
+
+        //api/queues/unicom-subscriptions/subscriptions.IEventStoreIndex/bindings
+        return await GetAsync<IEnumerable<Exchange>>(string.Format("exchanges/{0}", vhost)).ConfigureAwait(false);
+    }
+
+    internal async Task<bool> DeleteBindingAsync(Binding binding)
+    {
+        string path = BuildBindingPath(binding);
+        var uri = await BuildEndpointUriAsync(path).ConfigureAwait(false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
+        request.Content = new StringContent(string.Empty, Encoding.UTF8, "application/json");
+
+        using var response = await httpClient.SendAsync(request).ConfigureAwait(false);
+
+        if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.Created or HttpStatusCode.NoContent)
+            return true;
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return false;
+
+        throw new UnexpectedHttpStatusCodeException(response.StatusCode);
     }
 
     private async Task PutAsync(string path)
@@ -210,6 +246,8 @@ public sealed class RabbitMqManagementClient : IDisposable
         var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         return JsonSerializer.Deserialize<T>(content, settings);
     }
+
+   
 
     private string SanitiseVhostName(string vhostName) => Uri.EscapeDataString(vhostName);
 
@@ -273,6 +311,31 @@ public sealed class RabbitMqManagementClient : IDisposable
             }
         }
         return queryStringBuilder.ToString();
+    }
+
+    private static string BuildBindingPath(Binding binding)
+    {
+        if (string.IsNullOrEmpty(binding.Source))
+            throw new InvalidOperationException(
+                "Cannot delete the implicit default-exchange binding.");
+
+        if (string.IsNullOrEmpty(binding.PropertiesKey))
+            throw new InvalidOperationException(
+                "PropertiesKey is required; fetch the binding from a listing endpoint first.");
+
+        string destinationKind = binding.DestinationType switch
+        {
+            "queue" => "q",
+            "exchange" => "e",
+            _ => throw new InvalidOperationException(
+                $"Unsupported destination_type '{binding.DestinationType}'.")
+        };
+
+        return "bindings/" +
+               $"{Uri.EscapeDataString(binding.Vhost)}/e/" +
+               $"{Uri.EscapeDataString(binding.Source)}/{destinationKind}/" +
+               $"{Uri.EscapeDataString(binding.Destination)}/" +
+               $"{Uri.EscapeDataString(binding.PropertiesKey)}";
     }
 
     public void Dispose()
