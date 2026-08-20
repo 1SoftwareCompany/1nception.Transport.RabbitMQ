@@ -43,31 +43,30 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
         regularQueueName = bcRabbitMqNamer.Get_QueueName(type, consumerOptions.CurrentValue.FanoutMode);
 
-        tenantsOptionsMonitor.OnChange(async newOptions =>
-        {
-            if (logger.IsEnabled(LogLevel.Debug))
-                this.logger.LogDebug("Tenant options re-loaded with {@options}", newOptions);
-
-            tenantsOptions = newOptions;
-
-            using (IConnection connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
-            using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
-            {
-                IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
-
-                foreach (var subscriber in subscribersWithDedicatedQueues)
-                {
-                    string specialQueueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, this.consumerOptions.FanoutMode);
-                    await RecoverModelAsync(specialQueueName, channel, [subscriber]).ConfigureAwait(false);
-                }
-
-                IEnumerable<ISubscriber> theRestOfTheSubscribers = subscriberCollection.Subscribers.Except(subscribersWithDedicatedQueues);
-                await RecoverModelAsync(regularQueueName, channel, theRestOfTheSubscribers).ConfigureAwait(false);
-            }
-        });
+        tenantsOptionsMonitor.OnChange(TenantOptionsChanges);
     }
 
     public async Task BootstrapAsync()
+    {
+        await BootstrapInternalAsync(tenantsOptions.Tenants).ConfigureAwait(false);
+    }
+
+    public async Task BootstrapAsync(IEnumerable<string> tenants)
+    {
+        // race condition check
+        HashSet<string> allActualTenants = tenantsOptions.Tenants.ToHashSet();
+        foreach (string tenant in tenants)
+        {
+            if (allActualTenants.Contains(tenant) == false) // the OnChange method hasn't fired yet... but in the inception booter it has fired, because we are here... we can fix this by returning the WIP code that needs to be tested, where we can set only the specific public bindings
+            {
+                allActualTenants.Add(tenant);
+            }
+        }
+
+        await BootstrapInternalAsync(allActualTenants).ConfigureAwait(false);
+    }
+
+    public async Task BootstrapInternalAsync(IEnumerable<string> allTenants) 
     {
         using (var connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
         using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
@@ -77,11 +76,11 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
             foreach (var subscriber in subscribersWithDedicatedQueues)
             {
                 string specialQueueName = bcRabbitMqNamer.Get_QueueName(subscriber.HandlerType, consumerOptions.FanoutMode);
-                await RecoverModelAsync(specialQueueName, channel, [subscriber]).ConfigureAwait(false);
+                await RecoverModelAsync(specialQueueName, channel, [subscriber], allTenants).ConfigureAwait(false);
             }
 
             IEnumerable<ISubscriber> theRestOfTheSubscribers = subscriberCollection.Subscribers.Except(subscribersWithDedicatedQueues);
-            await RecoverModelAsync(regularQueueName, channel, theRestOfTheSubscribers).ConfigureAwait(false);
+            await RecoverModelAsync(regularQueueName, channel, theRestOfTheSubscribers, allTenants).ConfigureAwait(false);
         }
     }
 
@@ -145,7 +144,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         return routingHeaders;
     }
 
-    private async Task RecoverModelAsync(string queueName, IChannel channel, IEnumerable<ISubscriber> subscribers)
+    private async Task RecoverModelAsync(string queueName, IChannel channel, IEnumerable<ISubscriber> subscribers, IEnumerable<string> allTenants)
     {
         var messageTypes = subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
 
@@ -239,13 +238,13 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
                 {
                     if (isIEventStoreIndex && (typeof(IPublicEvent)).IsAssignableFrom(msgType)) // public event that needs to be handled in index, so we prefix the tenant
                     {
-                        BuildHeadersForMessageTypeOutsideCurrentBC(contractId, bc, bindHeaders, handlers);
+                        BuildHeadersForMessageTypeOutsideCurrentBC(contractId, bc, bindHeaders, handlers, allTenants);
                     }
                     else
                     {
                         if (bc.Equals(boundedContext.Name, StringComparison.OrdinalIgnoreCase) == false)
                         {
-                            BuildHeadersForMessageTypeOutsideCurrentBC(contractId, bc, bindHeaders, handlers);
+                            BuildHeadersForMessageTypeOutsideCurrentBC(contractId, bc, bindHeaders, handlers, allTenants);
                         }
                         else
                         {
@@ -256,7 +255,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
                 else // TRIGGER
                 {
                     BuildHeadersForMessageTypeForCurrentBC(contractId, bc, bindHeaders, handlers); // here we put both because we can have signals in the same BC and ALSO between diff systems
-                    BuildHeadersForMessageTypeOutsideCurrentBC(contractId, bc, bindHeaders, handlers);
+                    BuildHeadersForMessageTypeOutsideCurrentBC(contractId, bc, bindHeaders, handlers, allTenants);
                 }
 
             }
@@ -278,11 +277,11 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         }
     }
 
-    private void BuildHeadersForMessageTypeOutsideCurrentBC(string messageContractId, string currentBC, Dictionary<string, object> headersRef, List<string> handlers)
+    private void BuildHeadersForMessageTypeOutsideCurrentBC(string messageContractId, string currentBC, Dictionary<string, object> headersRef, List<string> handlers, IEnumerable<string> allTenants)
     {
         headersRef.TryAdd(messageContractId, currentBC);
 
-        foreach (string tenant in tenantsOptions.Tenants)
+        foreach (string tenant in allTenants)
         {
             string contractIdWithTenant = $"{messageContractId}@{tenant}";
             headersRef.Add(contractIdWithTenant, currentBC);
@@ -302,6 +301,17 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         foreach (var handler in handlers)
         {
             headersRef.Add($"{messageContractId}@{handler}", currentBC);
+        }
+    }
+
+    private void TenantOptionsChanges(TenantsOptions newOptions)
+    {
+        if (tenantsOptions.Tenants.SequenceEqual(newOptions.Tenants) == false) // Check for difference between tenants and newOptions
+        {
+            if (logger.IsEnabled(LogLevel.Debug))
+                this.logger.LogDebug("Tenant options re-loaded with {@options}", newOptions);
+
+            tenantsOptions = newOptions;
         }
     }
 }

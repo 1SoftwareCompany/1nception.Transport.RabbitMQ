@@ -44,6 +44,11 @@ public class RpcApiStartup : IInceptionStartup
         return Task.CompletedTask;
     }
 
+    public Task BootstrapAsync(IEnumerable<string> tenants)
+    {
+        return Task.CompletedTask;
+    }
+
     private static ILookup<Type, Type> GetHandlers()
     {
         ILookup<Type, Type> handlers = new DefaulAssemblyScanner()

@@ -1,4 +1,5 @@
-﻿using System.Threading.Tasks;
+﻿using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Startup;
 
@@ -15,5 +16,10 @@ public class PublishedLanguageStartup : IInceptionStartup
     public async Task BootstrapAsync()
     {
         await infrastructure.InitializeAsync();
+    }
+
+    public Task BootstrapAsync(IEnumerable<string> tenants)
+    {
+        return Task.CompletedTask;
     }
 }
