@@ -19,7 +19,7 @@ public class PublicRabbitMqPublisher : RabbitMqPublisherBase<IPublicEvent>
         this.options = options;
     }
 
-    protected override IBasicProperties AttachHeaders(IBasicProperties properties, InceptionMessage message)
+    protected override BasicProperties AttachHeaders(BasicProperties properties, InceptionMessage message)
     {
         string boundedContext = message.Headers[MessageHeader.BoundedContext];
         string tenant = message.Headers[MessageHeader.Tenant];

@@ -11,38 +11,34 @@ public class SchedulePoker<T> //where T : IMessageHandler
 {
     private readonly IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor;
     private readonly ConnectionResolver connectionResolver;
-    private readonly IOptionsMonitor<BoundedContext> boundedContext;
     AsyncEventingBasicConsumer consumer;
 
-    public SchedulePoker(IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor, ConnectionResolver connectionResolver, IOptionsMonitor<BoundedContext> boundedContext)
+    public SchedulePoker(IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor, ConnectionResolver connectionResolver)
     {
         this.rmqOptionsMonitor = rmqOptionsMonitor;
         this.connectionResolver = connectionResolver;
-        this.boundedContext = boundedContext;
     }
 
-    public async Task PokeAsync(CancellationToken cancellationToken)
+    public async Task PokeAsync(string queueName, CancellationToken cancellationToken)
     {
         try
         {
-            string queueName = $"{GetQueueName(boundedContext.CurrentValue.Name)}.Scheduled";
-
             while (cancellationToken.IsCancellationRequested == false)
             {
-                IConnection connection = connectionResolver.Resolve(queueName, rmqOptionsMonitor.CurrentValue);
+                IConnection connection = await connectionResolver.ResolveAsync(rmqOptionsMonitor.CurrentValue).ConfigureAwait(false); // all scheduled queues will share 1 connection
 
-                using (IModel channel = connection.CreateModel())
+                using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
                 {
                     try
                     {
                         consumer = new AsyncEventingBasicConsumer(channel);
-                        consumer.Received += AsyncListener_Received;
+                        consumer.ReceivedAsync += AsyncListener_Received;
 
-                        string consumerTag = channel.BasicConsume(queue: queueName, autoAck: false, consumer: consumer);
+                        string consumerTag = await channel.BasicConsumeAsync(queue: queueName, autoAck: false, consumer: consumer).ConfigureAwait(false);
 
                         await Task.Delay(30000, cancellationToken).ConfigureAwait(false);
 
-                        consumer.Received -= AsyncListener_Received;
+                        consumer.ReceivedAsync -= AsyncListener_Received;
                     }
                     catch (Exception)
                     {
@@ -58,18 +54,4 @@ public class SchedulePoker<T> //where T : IMessageHandler
     {
         return Task.CompletedTask;
     }
-
-    private string GetQueueName(string boundedContext, bool useFanoutMode = false)
-    {
-        if (useFanoutMode)
-        {
-            return $"{boundedContext}.{typeof(T).Name}.{Environment.MachineName}";
-        }
-        else
-        {
-            string systemMarker = typeof(ISystemHandler).IsAssignableFrom(typeof(T)) ? "inception." : string.Empty;
-            return $"{boundedContext}.{systemMarker}{typeof(T).Name}";
-        }
-    }
 }
-

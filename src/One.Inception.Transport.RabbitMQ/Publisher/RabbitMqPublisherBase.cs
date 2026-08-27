@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
@@ -22,31 +23,11 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         this.logger = logger;
     }
 
-    // Old version where we foreach first around exchange names. It is known to be working
-    //protected override PublishResult PublishInternal(InceptionMessage message)
-    //{
-    //    PublishResult publishResult = PublishResult.Initial;
-
-    //    string boundedContext = message.BoundedContext;
-
-    //    IEnumerable<string> exchanges = GetExistingExchangesNames(message);
-    //    foreach (string exchange in exchanges)
-    //    {
-    //        IEnumerable<IRabbitMqOptions> scopedOptions = GetOptionsFor(message);
-    //        foreach (IRabbitMqOptions scopedOpt in scopedOptions)
-    //        {
-    //            publishResult &= Publish(message, boundedContext, exchange, scopedOpt);
-    //        }
-    //    }
-
-    //    return publishResult;
-    //}
-
-    protected override PublishResult PublishInternal(InceptionMessage message)
+    protected override async Task<PublishResult> PublishInternalAsync(InceptionMessage message)
     {
         PublishResult publishResult = PublishResult.Initial;
 
-        string boundedContext = message.BoundedContext;
+        string publishToBoundedContext = message.BoundedContext;
 
         IEnumerable<string> exchanges = GetExistingExchangesNames(message);
 
@@ -56,7 +37,8 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         {
             foreach (string exchange in exchanges)
             {
-                publishResult &= Publish(message, boundedContext, exchange, scopedOpt);
+                PublishResult resultNow = await PublishAsync(message, publishToBoundedContext, exchange, scopedOpt).ConfigureAwait(false);
+                publishResult &= resultNow;
             }
         }
 
@@ -65,30 +47,34 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
 
     protected abstract IEnumerable<IRabbitMqOptions> GetOptionsFor(InceptionMessage message);
 
-    private PublishResult Publish(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions options)
+    private async Task<PublishResult> PublishAsync(InceptionMessage message, string publishToBoundedContext, string exchange, IRabbitMqOptions options)
     {
         try
         {
-            IModel exchangeModel = channelResolver.Resolve(exchange, options, boundedContext);
-            IBasicProperties props = exchangeModel.CreateBasicProperties();
-            props = BuildMessageProperties(props, message);
-            props = AttachHeaders(props, message);
+            bool result = await channelResolver.UseChannelAsync(exchange, options, publishToBoundedContext, async channel =>
+            {
+                BasicProperties props = new BasicProperties();
+                props = BuildMessageProperties(props, message);
+                props = AttachHeaders(props, message);
 
-            byte[] body = serializer.SerializeToBytes(message);
-            exchangeModel.BasicPublish(exchange, string.Empty, false, props, body);
-            logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
+                byte[] body = serializer.SerializeToBytes(message);
+                await channel.BasicPublishAsync(exchange, string.Empty, false, props, body).ConfigureAwait(false);
 
-            return new PublishResult(true, true);
+                if (logger.IsEnabled(LogLevel.Debug))
+                    logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
+
+            }).ConfigureAwait(false);
+
+            return new PublishResult(true, result); // is this correct?
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange);
-
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
             return PublishResult.Failed;
         }
     }
 
-    protected virtual IBasicProperties BuildMessageProperties(IBasicProperties properties, InceptionMessage message)
+    protected virtual BasicProperties BuildMessageProperties(BasicProperties properties, InceptionMessage message)
     {
         properties.Headers = new Dictionary<string, object>();
         properties.Headers.Add("messageid", message.Id.ToByteArray());
@@ -100,7 +86,7 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
         return properties;
     }
 
-    protected virtual IBasicProperties AttachHeaders(IBasicProperties properties, InceptionMessage message)
+    protected virtual BasicProperties AttachHeaders(BasicProperties properties, InceptionMessage message)
     {
         string boundedContext = message.BoundedContext;
 

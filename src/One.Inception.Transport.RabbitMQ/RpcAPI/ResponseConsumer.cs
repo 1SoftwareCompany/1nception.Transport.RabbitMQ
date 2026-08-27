@@ -17,23 +17,27 @@ public class ResponseConsumer<TRequest, TResponse> : AsyncConsumerBase
     private static HashSet<string> occupiedNames = new HashSet<string>();
     private static string _timeout = "30000";
     private readonly string queueName;
-    private readonly string queueToConsume;
+    private string queueToConsume;
 
-    public ResponseConsumer(string queueName, IModel model, ISerializer serializer, ILogger logger)
-      : base(model, serializer, logger)
+    public ResponseConsumer(string queueName, IChannel channel, ISerializer serializer, ILogger logger)
+      : base(channel, serializer, logger)
     {
         this.queueName = queueName;
-        queueToConsume = DeclareUniqueQueue();
-        model.BasicConsume(queue: queueToConsume, autoAck: true, consumer: this);
+    }
+
+    public override async Task StartAsync()
+    {
+        queueToConsume = await DeclareUniqueQueueAsync().ConfigureAwait(false);
+        await channel.BasicConsumeAsync(queue: queueToConsume, autoAck: true, consumer: this).ConfigureAwait(false);
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation("RPC response consumer started for {rmqqueue}.", queueToConsume);
     }
 
-    public Task<TResponse> SendAsync(TRequest request, CancellationToken cancellationToken = default(CancellationToken))
+    public async Task<TResponse> SendAsync(TRequest request, CancellationToken cancellationToken = default(CancellationToken))
     {
         string correlationId = Guid.NewGuid().ToString(); // Create a new request id
-        IBasicProperties props = model.CreateBasicProperties();
+        BasicProperties props = new BasicProperties();
         props.CorrelationId = correlationId;
         props.ReplyTo = queueToConsume;
         props.Expiration = _timeout;
@@ -44,13 +48,14 @@ public class ResponseConsumer<TRequest, TResponse> : AsyncConsumerBase
         TaskCompletionSource<TResponse> taskSource = new TaskCompletionSource<TResponse>();
         requestTracker.TryAdd(correlationId, taskSource);
 
-        model.BasicPublish(exchange: "", routingKey: queueName, basicProperties: props, body: messageBytes); // publish request
+        await channel.BasicPublishAsync(exchange: "", routingKey: queueName, false, basicProperties: props, body: messageBytes); // publish request
 
         if (logger.IsEnabled(LogLevel.Debug))
             logger.LogDebug("Publish requests, to {rmqqueue}", queueName);
 
         cancellationToken.Register(() => requestTracker.TryRemove(correlationId, out _));
-        return taskSource.Task;
+
+        return await taskSource.Task.ConfigureAwait(false);
     }
 
     protected override Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer) // await responses and add to collection
@@ -61,7 +66,7 @@ public class ResponseConsumer<TRequest, TResponse> : AsyncConsumerBase
 
         try
         {
-            if (requestTracker.TryRemove(ev.BasicProperties.CorrelationId, out task) == false) // confirm that request is not proccessed
+            if (requestTracker.TryRemove(ev.BasicProperties.CorrelationId, out task) == false) // check if that request has been already proccessed.
             {
                 return Task.CompletedTask;
             }
@@ -88,9 +93,11 @@ public class ResponseConsumer<TRequest, TResponse> : AsyncConsumerBase
         return Task.CompletedTask;
     }
 
-    private string DeclareUniqueQueue()
+    private async Task<string> DeclareUniqueQueueAsync()
     {
         string queue = $"{queueName}.client.{Guid.NewGuid().ToString().Substring(0, 8)}";
-        return model.QueueDeclare(queue, exclusive: false).QueueName;
+        QueueDeclareOk queueDeclareResult = await channel.QueueDeclareAsync(queue, exclusive: false).ConfigureAwait(false);
+
+        return queueDeclareResult.QueueName;
     }
 }

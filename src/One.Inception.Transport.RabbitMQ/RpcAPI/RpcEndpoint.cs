@@ -11,7 +11,7 @@ namespace One.Inception.Transport.RabbitMQ.RpcAPI;
 
 public interface IRpc
 {
-    internal void StartServer();
+    internal Task StartServerAsync();
 
     internal Task StopConsumersAsync();
 }
@@ -77,15 +77,20 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
         return response;
     }
 
-    void IRpc.StartServer()
+    async Task IRpc.StartServerAsync()
     {
         try
         {
             IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
-            IModel requestChannel = channelResolver.Resolve(route, scopedOptions, options.VHost);
 
             for (int workerNumber = 0; workerNumber < consumerOptions.RpcWorkersCount; workerNumber++)
+            {
+                string workerChannelKey = $"{route}_{workerNumber}";
+                IChannel requestChannel = await channelResolver.ResolveAsync(workerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
+
                 server = new RequestConsumer<TRequest, TResponse>(route, requestChannel, factory, serializer, serviceProvider, logger);
+                await server.StartAsync().ConfigureAwait(false);
+            }
 
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation("{rmqrpcworkerscount} RPC request consumers started for {route}.", consumerOptions.RpcWorkersCount, route);
@@ -103,7 +108,6 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
     }
 
     private static SemaphoreSlim threadGate = new SemaphoreSlim(1, 1);
-    private static bool isClientCreated = false;
 
     private async Task<ResponseConsumer<TRequest, TResponse>> StartClientAsync()
     {
@@ -111,7 +115,7 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
         {
             await threadGate.WaitAsync(20000).ConfigureAwait(false);
 
-            if (isClientCreated == false)
+            if (client is null)
             {
                 var attributes = typeof(TRequest).GetCustomAttributes(typeof(DataContractAttribute), false);
                 var dataContractAttribute = attributes[0] as DataContractAttribute;
@@ -123,9 +127,12 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
                     if (cfgFound.HasValue && cfgFound.Value)
                     {
                         IRabbitMqOptions scopedOptions = options.GetOptionsFor(destinationBC);
-                        IModel requestChannel = channelResolver.Resolve(route, scopedOptions, destinationBC);
+                        IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, destinationBC).ConfigureAwait(false);
                         client = new ResponseConsumer<TRequest, TResponse>(route, requestChannel, serializer, logger);
-                        isClientCreated = true;
+                        await client.StartAsync().ConfigureAwait(false);
+
+                        if (logger.IsEnabled(LogLevel.Information))
+                            logger.LogInformation("{rmqrpcworkerscount} RPC response consumers started for {route}.", consumerOptions.RpcWorkersCount, route);
                     }
                     else
                     {

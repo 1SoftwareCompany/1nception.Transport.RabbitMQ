@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
 namespace One.Inception.Transport.RabbitMQ;
@@ -7,63 +10,146 @@ namespace One.Inception.Transport.RabbitMQ;
 public class ConnectionResolver : IDisposable
 {
     private readonly ConcurrentDictionary<string, IConnection> connectionsPerVHost;
-    private readonly IRabbitMqConnectionFactory connectionFactory;
-    private static readonly object connectionLock = new object();
 
-    public ConnectionResolver(IRabbitMqConnectionFactory connectionFactory)
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> gatesPerConnectionKeyCreation = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> gatesForRecoveryWait = new();
+
+    private readonly IRabbitMqConnectionFactory connectionFactory;
+    private readonly ILogger<ConnectionResolver> logger;
+
+    public ConnectionResolver(IRabbitMqConnectionFactory connectionFactory, ILogger<ConnectionResolver> logger, CancellationToken cancellationToken = default)
     {
         connectionsPerVHost = new ConcurrentDictionary<string, IConnection>();
         this.connectionFactory = connectionFactory;
+        this.logger = logger;
     }
 
-    public IConnection Resolve(string key, IRabbitMqOptions options)
+    public async Task<IConnection> ResolveAsync(IRabbitMqOptions options, CancellationToken cancellationToken = default)
     {
-        IConnection connection = GetExistingConnection(key);
-
-        if (connection is null || connection.IsOpen == false)
+        IConnection connection = GetExistingConnection(options);
+        if (connection is not null)
         {
-            lock (connectionLock)
+            if (connection.IsOpen)
+                return connection;
+
+            SemaphoreSlim recoveryGate = gatesForRecoveryWait.GetOrAdd(options.ConnectionKey, _ => new SemaphoreSlim(1, 1));
+            await recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
             {
-                connection = GetExistingConnection(key);
-                if (connection is null || connection.IsOpen == false)
+                while (connection.IsOpen == false)
                 {
-                    connection = CreateConnection(key, options);
+                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 500 ms. Key: {connectionKey}", options.ConnectionKey);
+                    await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+
+                    if (connection.IsOpen)
+                    {
+                        logger.LogInformation("Connection to RMQ is open after recovery... Key: {connectionKey}", options.ConnectionKey);
+                        return connection;
+                    }
                 }
+            }
+            finally
+            {
+                recoveryGate.Release();
             }
         }
 
-        return connection;
-    }
+        SemaphoreSlim lockPerConnection = gatesPerConnectionKeyCreation.GetOrAdd(options.ConnectionKey, _ => new SemaphoreSlim(1, 1));
+        await lockPerConnection.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-    private IConnection GetExistingConnection(string key)
-    {
-        connectionsPerVHost.TryGetValue(key, out IConnection connection);
-
-        return connection;
-    }
-
-    private IConnection CreateConnection(string key, IRabbitMqOptions options)
-    {
-        IConnection connection = connectionFactory.CreateConnectionWithOptions(options);
-
-        if (connectionsPerVHost.TryGetValue(key, out _))
+        try
         {
-            if (connectionsPerVHost.TryRemove(key, out _))
-                connectionsPerVHost.TryAdd(key, connection);
+            connection = GetExistingConnection(options);
+            if (connection is null)
+                connection = await CreateConnectionAsync(options).ConfigureAwait(false);
+
+            if (connection is null)
+                throw new InvalidOperationException("Failed to create or retrieve a RabbitMQ connection.");
+
+            return connection;
+        }
+        finally
+        {
+            lockPerConnection.Release();
+        }
+    }
+
+    private IConnection GetExistingConnection(IRabbitMqOptions options)
+    {
+        connectionsPerVHost.TryGetValue(options.ConnectionKey, out IConnection connection);
+
+        return connection;
+    }
+
+    private async Task<IConnection> CreateConnectionAsync(IRabbitMqOptions options)
+    {
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            string connectionPoolInfo = $"Connection Pool Info: {string.Join(", ", connectionsPerVHost.Keys)}";
+            logger.LogDebug(connectionPoolInfo);
+        }
+
+        IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options).ConfigureAwait(false);
+        if (connectionsPerVHost.TryAdd(options.ConnectionKey, connection))
+        {
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                string connectionPoolInfo = $"Connection Pool Info: {string.Join(", ", connectionsPerVHost.Keys)}";
+                logger.LogDebug(connectionPoolInfo);
+            }
+            SubscribeToConnectionEvents(options.ConnectionKey, connection);
+            return connection;
         }
         else
         {
-            connectionsPerVHost.TryAdd(key, connection);
-        }
+            await connection.CloseAsync().ConfigureAwait(false);
 
-        return connection;
+            return GetExistingConnection(options);
+        }
+    }
+
+    private void SubscribeToConnectionEvents(string key, IConnection connection)
+    {
+        connection.ConnectionRecoveryErrorAsync += (sender, ea) =>
+        {
+            logger.LogError(ea.Exception, "RabbitMQ auto-recovery FAILED for connection {ConnectionKey}. The connection may never reopen on its own, but probably will after some time...", key);
+            return Task.CompletedTask;
+        };
+
+        connection.ConnectionShutdownAsync += (sender, ea) =>
+        {
+            logger.LogError("RabbitMQ connection {ConnectionKey} shut down. Initiator={Initiator}, Code={ReplyCode}, Text={ReplyText}", key, ea.Initiator, ea.ReplyCode, ea.ReplyText);
+            return Task.CompletedTask;
+        };
+
+        connection.CallbackExceptionAsync += (sender, ea) =>
+        {
+            logger.LogError(ea.Exception, "RabbitMQ callback exception on connection {ConnectionKey}.", key);
+            return Task.CompletedTask;
+        };
+
+        // CRITICAL BLIND SPOT: when blocked, IsOpen stays TRUE but the broker has stopped
+        // reading the socket. Publishes stall silently. No IsBlocked property exists to poll.
+        connection.ConnectionBlockedAsync += (sender, ea) =>
+        {
+            logger.LogCritical("RabbitMQ connection {ConnectionKey} was BLOCKED by the broker. Reason={Reason}. Publishes will stall until the resource alarm clears.", key, ea.Reason);
+            return Task.CompletedTask;
+        };
+
+        connection.ConnectionUnblockedAsync += (sender, ea) =>
+        {
+            logger.LogWarning("RabbitMQ connection {ConnectionKey} was unblocked by the broker. Publishing can resume.", key);
+            return Task.CompletedTask;
+        };
+
     }
 
     public void Dispose()
     {
         foreach (var connection in connectionsPerVHost)
         {
-            connection.Value.Close(TimeSpan.FromSeconds(5));
+            connection.Value.CloseAsync(TimeSpan.FromSeconds(5));
         }
     }
 }

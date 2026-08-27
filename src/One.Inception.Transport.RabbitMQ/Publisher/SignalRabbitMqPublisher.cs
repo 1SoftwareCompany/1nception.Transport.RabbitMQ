@@ -1,9 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Publisher;
 
@@ -29,7 +30,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         this.logger = logger;
     }
 
-    protected override PublishResult PublishInternal(InceptionMessage message)
+    protected override async Task<PublishResult> PublishInternalAsync(InceptionMessage message)
     {
         PublishResult publishResult = PublishResult.Initial;
 
@@ -46,14 +47,14 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
             {
                 foreach (var exchange in exchanges)
                 {
-                    publishResult &= PublishInternally(message, messageBC, exchange, internalOptions);
+                    publishResult &= await PublishInternallyAsync(message, messageBC, exchange, internalOptions).ConfigureAwait(false);
                 }
             }
             else
             {
                 foreach (var exchange in exchanges)
                 {
-                    publishResult &= PublishPublically(message, messageBC, exchange, options.PublicClustersOptions);
+                    publishResult &= await PublishPublicallyAsync(message, messageBC, exchange, options.PublicClustersOptions).ConfigureAwait(false);
                 }
             }
 
@@ -65,66 +66,84 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         }
     }
 
-    private PublishResult PublishInternally(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions internalOptions)
-    {
-        IModel exchangeModel = channelResolver.Resolve(exchange, internalOptions, boundedContext);
-
-        IBasicProperties props = exchangeModel.CreateBasicProperties();
-        props = BuildMessageProperties(props, message);
-        props = BuildInternalHeaders(props, message);
-
-        return PublishUsingChannel(message, exchange, exchangeModel, props);
-    }
-
-    private PublishResult PublishPublically(InceptionMessage message, string boundedContext, string exchange, IEnumerable<IRabbitMqOptions> scopedOptions)
-    {
-        PublishResult publishResult = PublishResult.Initial;
-
-        foreach (var opt in scopedOptions)
-        {
-            IModel exchangeModel = channelResolver.Resolve(exchange, opt, boundedContext);
-
-            IBasicProperties props = exchangeModel.CreateBasicProperties();
-            props = BuildMessageProperties(props, message);
-            props = BuildPublicHeaders(props, message);
-
-            publishResult &= PublishUsingChannel(message, exchange, exchangeModel, props);
-        }
-
-        return publishResult;
-    }
-
-    private PublishResult PublishUsingChannel(InceptionMessage message, string exchange, IModel exchangeModel, IBasicProperties properties)
+    private async Task<PublishResult> PublishInternallyAsync(InceptionMessage message, string boundedContext, string exchange, IRabbitMqOptions internalOptions)
     {
         try
         {
-            byte[] body = serializer.SerializeToBytes(message);
-            exchangeModel.BasicPublish(exchange, string.Empty, false, properties, body);
+            bool result = await channelResolver.UseChannelAsync(exchange, internalOptions, boundedContext, async channel =>
+            {
+                BasicProperties props = new BasicProperties();
+                props = BuildMessageProperties(props, message);
+                props = BuildInternalHeaders(props, message);
 
-            logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, properties.Headers);
+                var result = await PublishUsingChannelAsync(message, exchange, channel, props).ConfigureAwait(false);
 
-            return new PublishResult(true, true);
+            }).ConfigureAwait(false);
+
+            return new PublishResult(true, result); // is this correct?
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange);
-
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
             return PublishResult.Failed;
         }
     }
 
-    private IBasicProperties BuildMessageProperties(IBasicProperties properties, InceptionMessage message)
+    private async Task<PublishResult> PublishPublicallyAsync(InceptionMessage message, string boundedContext, string exchange, IEnumerable<IRabbitMqOptions> scopedOptions)
+    {
+        try
+        {
+            PublishResult publishResult = PublishResult.Initial;
+
+            foreach (IRabbitMqOptions opt in scopedOptions)
+            {
+                bool publishSuccess = await channelResolver.UseChannelAsync(exchange, opt, boundedContext, async channel =>
+                    {
+                        //IBasicProperties props = exchangeModel.CreateBasicProperties();
+                        BasicProperties props = new BasicProperties();
+                        props = BuildMessageProperties(props, message);
+                        props = BuildPublicHeaders(props, message);
+
+                        publishResult &= await PublishUsingChannelAsync(message, exchange, channel, props).ConfigureAwait(false);
+
+                    }).ConfigureAwait(false);
+
+                if (publishSuccess == false)
+                    publishResult &= new PublishResult(true, false);
+            }
+
+            return publishResult;
+        }
+
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Published message to exchange {exchange} has FAILED.", exchange); /// will never reach actually reach here, all of the exceptions are being caught in <see cref="PublisherChannelResolver.UseChannelAsync(string, IRabbitMqOptions, string, Func{IChannel, Task})"/>
+            return PublishResult.Failed;
+        }
+    }
+
+    private async Task<PublishResult> PublishUsingChannelAsync(InceptionMessage message, string exchange, IChannel exchangeModel, BasicProperties properties)
+    {
+        byte[] body = serializer.SerializeToBytes(message);
+        await exchangeModel.BasicPublishAsync(exchange, string.Empty, false, properties, body).ConfigureAwait(false);
+
+        logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, properties.Headers);
+
+        return new PublishResult(true, true);
+    }
+
+    private BasicProperties BuildMessageProperties(BasicProperties properties, InceptionMessage message)
     {
         string ttl = message.GetTtlMilliseconds();
         if (string.IsNullOrEmpty(ttl) == false)
             properties.Expiration = ttl;
         properties.Persistent = false;
-        properties.DeliveryMode = 1;
+        properties.DeliveryMode = DeliveryModes.Transient;
 
         return properties;
     }
 
-    private IBasicProperties BuildPublicHeaders(IBasicProperties properties, InceptionMessage message)
+    private BasicProperties BuildPublicHeaders(BasicProperties properties, InceptionMessage message)
     {
         string contractId = message.GetMessageType().GetContractId();
         string boundedContext = message.BoundedContext;
@@ -137,7 +156,7 @@ public sealed class SignalRabbitMqPublisher : PublisherBase<ISignal>
         return properties;
     }
 
-    private IBasicProperties BuildInternalHeaders(IBasicProperties properties, InceptionMessage message)
+    private BasicProperties BuildInternalHeaders(BasicProperties properties, InceptionMessage message)
     {
         string contractId = message.GetMessageType().GetContractId();
         string boundedContext = message.BoundedContext;

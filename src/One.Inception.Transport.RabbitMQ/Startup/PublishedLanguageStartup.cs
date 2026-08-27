@@ -1,4 +1,7 @@
-﻿namespace One.Inception.Transport.RabbitMQ.Startup;
+﻿using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace One.Inception.Transport.RabbitMQ.Startup;
 
 [InceptionStartup(Bootstraps.ExternalResource)]
 public class PublishedLanguageStartup : IInceptionStartup
@@ -10,8 +13,13 @@ public class PublishedLanguageStartup : IInceptionStartup
         this.infrastructure = infrastructure;
     }
 
-    public void Bootstrap()
+    public async Task BootstrapAsync()
     {
-        infrastructure.Initialize();
+        await infrastructure.InitializeAsync();
+    }
+
+    public Task BootstrapAsync(IEnumerable<string> tenants)
+    {
+        return Task.CompletedTask;
     }
 }

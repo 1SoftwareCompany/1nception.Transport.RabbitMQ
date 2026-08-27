@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using One.Inception.MessageProcessing;
 using Microsoft.Extensions.Logging;
+using One.Inception.MessageProcessing;
+using One.Inception.Transport.RabbitMQ.DedicatedQueues;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -13,36 +15,37 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
 {
     protected readonly ILogger logger;
     protected readonly ISerializer serializer;
-    protected readonly IModel model;
+    protected readonly IChannel channel;
     private bool isСurrentlyConsuming;
 
-    public AsyncConsumerBase(IModel model, ISerializer serializer, ILogger logger) : base(model)
+    public AsyncConsumerBase(IChannel channel, ISerializer serializer, ILogger logger) : base(channel)
     {
-        this.model = model;
+        this.channel = channel;
         this.serializer = serializer;
         this.logger = logger;
         isСurrentlyConsuming = false;
-        Received += AsyncListener_Received;
+        ReceivedAsync += AsyncListener_Received;
     }
 
     protected abstract Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer);
 
+    public abstract Task StartAsync();
+
     public async Task StopAsync()
     {
         // 1. We detach the listener so ther will be no new messages coming from the queue
-        Received -= AsyncListener_Received;
+        ReceivedAsync -= AsyncListener_Received;
 
         // 2. Wait to handle any messages in progress
         while (isСurrentlyConsuming)
         {
             // We are trying to wait all consumers to finish their current work.
             // Ofcourse the host could be forcibly shut down but we are doing our best.
-
             await Task.Delay(10).ConfigureAwait(false);
         }
 
-        if (model.IsOpen)
-            model.Abort();
+        if (channel.IsOpen)
+            await channel.AbortAsync();
     }
 
     private async Task AsyncListener_Received(object sender, BasicDeliverEventArgs @event)
@@ -75,13 +78,24 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
             }
         }
     }
+
+    protected InceptionMessage ExpandRawPayload(InceptionMessage inceptionMessage)
+    {
+        if (inceptionMessage.Payload is null && inceptionMessage.PayloadRaw?.Length > 0)
+        {
+            IMessage payload = serializer.DeserializeFromBytes<IMessage>(inceptionMessage.PayloadRaw);
+            return new InceptionMessage(payload, inceptionMessage.Headers);
+        }
+
+        return inceptionMessage;
+    }
 }
 
-public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
+public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
 {
     private readonly ISubscriberCollection<TSubscriber> subscriberCollection;
 
-    public AsyncConsumerBase(IModel model, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger) : base(model, serializer, logger)
+    public AsyncConsumerBase(IChannel channel, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger) : base(channel, serializer, logger)
     {
         this.subscriberCollection = subscriberCollection;
     }
@@ -100,29 +114,32 @@ public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
 
     protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
     {
-        InceptionMessage InceptionMessage = null;
+        InceptionMessage inceptionMessage = null;
         List<Task> deliverTasks = new List<Task>();
         try
         {
-            InceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
-            InceptionMessage = ExpandRawPayload(InceptionMessage);
+            inceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
+            inceptionMessage = ExpandRawPayload(inceptionMessage);
         }
         catch (Exception ex)
         {
             // TODO: send to dead letter exchange/queue
             // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
             logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
-            Ack(ev, consumer);
+            await AckAsync(ev, consumer).ConfigureAwait(false);
+
             return;
         }
 
-        var subscribers = subscriberCollection.GetInterestedSubscribers(InceptionMessage);
+        var subscribers = subscriberCollection.GetInterestedSubscribers(inceptionMessage);
+        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
+        var onlyTheTrueSubscribers = subscribers.Except(subscribersWithDedicatedQueues);
 
         try
         {
-            foreach (var subscriber in subscribers)
+            foreach (var subscriber in onlyTheTrueSubscribers)
             {
-                deliverTasks.Add(SafeProcessAsync(subscriber, InceptionMessage));
+                deliverTasks.Add(SafeProcessAsync(subscriber, inceptionMessage));
             }
 
             await Task.WhenAll(deliverTasks).ConfigureAwait(false);
@@ -138,32 +155,95 @@ public class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
                         subscriberErrors.AppendLine(subscriberCompletedTasks.Exception.ToString());
                     }
                 }
-                logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", InceptionMessage.GetMessageType(), InceptionMessage, subscriberErrors.ToString());
+                logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", inceptionMessage.GetMessageType(), inceptionMessage, subscriberErrors.ToString());
             }
         ))
         { }
         finally
         {
-            Ack(ev, consumer);
+            await AckAsync(ev, consumer).ConfigureAwait(false);
         }
 
-        static void Ack(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
+        async Task AckAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
         {
-            if (consumer.Model.IsOpen)
+            if (consumer.Channel.IsOpen)
             {
-                consumer.Model.BasicAck(ev.DeliveryTag, false);
+                await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
             }
         }
     }
+}
 
-    protected InceptionMessage ExpandRawPayload(InceptionMessage InceptionMessage)
+public abstract class AsyncConsumerCustomForSingleSubscriberBase : AsyncConsumerBase
+{
+    private readonly ISubscriber subscriber;
+
+    public AsyncConsumerCustomForSingleSubscriberBase(IChannel channel, ISubscriber subscriber, ISerializer serializer, ILogger logger) : base(channel, serializer, logger)
     {
-        if (InceptionMessage.Payload is null && InceptionMessage.PayloadRaw?.Length > 0)
+        this.subscriber = subscriber;
+    }
+
+    private Task SafeProcessAsync(ISubscriber subscriber, InceptionMessage InceptionMessage)
+    {
+        try
         {
-            IMessage payload = serializer.DeserializeFromBytes<IMessage>(InceptionMessage.PayloadRaw);
-            return new InceptionMessage(payload, InceptionMessage.Headers);
+            return subscriber.ProcessAsync(InceptionMessage);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
+    protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
+    {
+        InceptionMessage inceptionMessage = null;
+        try
+        {
+            inceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
+            inceptionMessage = ExpandRawPayload(inceptionMessage);
+        }
+        catch (Exception ex)
+        {
+            // TODO: send to dead letter exchange/queue
+            // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
+            logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
+            await AckAsync(ev, consumer).ConfigureAwait(false);
+
+            return;
         }
 
-        return InceptionMessage;
+        Task task = null;
+        try
+        {
+            task = SafeProcessAsync(subscriber, inceptionMessage);
+
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (True(() =>
+        {
+            // Try find some errors
+            StringBuilder subscriberError = new StringBuilder();
+
+            if (task.IsFaulted)
+            {
+                subscriberError.AppendLine(task.Exception.ToString());
+            }
+            logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", inceptionMessage.GetMessageType(), inceptionMessage, subscriberError.ToString());
+        }
+        ))
+        { }
+        finally
+        {
+            await AckAsync(ev, consumer).ConfigureAwait(false);
+        }
+
+        async Task AckAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
+        {
+            if (consumer.Channel.IsOpen)
+            {
+                await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
+            }
+        }
     }
 }
