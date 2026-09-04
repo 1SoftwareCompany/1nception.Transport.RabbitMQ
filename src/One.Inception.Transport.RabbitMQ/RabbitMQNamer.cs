@@ -158,6 +158,12 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
             isConventionalMessageType = true;
         }
 
+        if (typeof(IBroadcast).IsAssignableFrom(messageType))
+        {
+            yield return $"{bc}.{systemMarker}Broadcasts";
+            isConventionalMessageType = true;
+        }
+
         // This handles the message types which are not defined by 1nception.
         if (isConventionalMessageType == false)
         {
@@ -216,6 +222,12 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
             isConventionalMessageType = true;
         }
 
+        if (typeof(IBroadcast).IsAssignableFrom(messageType))
+        {
+            yield return $"{bc}.{systemMarker}Broadcasts";
+            isConventionalMessageType = true;
+        }
+
         // This handles the message types which are not defined by 1nception.
         if (isConventionalMessageType == false)
         {
@@ -235,6 +247,13 @@ public sealed class BoundedContextRabbitMqNamer : IRabbitMqNamer
             // This is the default
             return $"{boundedContext}.{systemMarker}{messageType.Name}";
         }
+    }
+
+    public string Get_NodeBroadcast_QueueName(Type messageType)
+    {
+        string systemMarker = typeof(ISystemHandler).IsAssignableFrom(messageType) ? "inception." : string.Empty;
+        // This is the default
+        return $"{boundedContext}.{systemMarker}{messageType.Name}.{Environment.MachineName}";
     }
 }
 

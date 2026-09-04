@@ -14,6 +14,9 @@ public class RabbitMqConsumerOptions : IEquatable<RabbitMqConsumerOptions>
 
     public int RpcWorkersCount { get; set; } = 10;
 
+    [Range(1, int.MaxValue, ErrorMessage = "The configuration `Inception:Transport:RabbitMq:Consumer:NodeBroadcastWorkersCount` allows values from 1 to 2147483647.")]
+    public int NodeBroadcastWorkersCount { get; set; } = 1;
+
     /// <summary>
     /// Drasticly changes the infrastructure behavior. This will create a separate queue per node and a message will be delivered to every node.
     /// </summary>
@@ -21,7 +24,7 @@ public class RabbitMqConsumerOptions : IEquatable<RabbitMqConsumerOptions>
 
     public override string ToString()
     {
-        return $"WorkersCount: {WorkersCount}, RpcTimeout: {10} sec.";
+        return $"WorkersCount: {WorkersCount}, RpcTimeout: {RpcTimeout} sec., RpcWorkersCount: {RpcWorkersCount}, NodeBroadcastWorkersCount: {NodeBroadcastWorkersCount}, FanoutMode: {FanoutMode}";
     }
 
     public bool Equals([AllowNull] RabbitMqConsumerOptions other)
@@ -29,7 +32,7 @@ public class RabbitMqConsumerOptions : IEquatable<RabbitMqConsumerOptions>
         if (other is null)
             return false;
 
-        return WorkersCount == other.WorkersCount && FanoutMode == other.FanoutMode && RpcTimeout == other.RpcTimeout;
+        return WorkersCount == other.WorkersCount && FanoutMode == other.FanoutMode && RpcTimeout == other.RpcTimeout && RpcWorkersCount == other.RpcWorkersCount && NodeBroadcastWorkersCount == other.NodeBroadcastWorkersCount;
     }
 
     public override bool Equals(object obj)
