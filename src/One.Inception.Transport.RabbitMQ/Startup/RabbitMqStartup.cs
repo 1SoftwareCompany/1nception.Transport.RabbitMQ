@@ -67,7 +67,7 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
         await BootstrapInternalAsync(allActualTenants).ConfigureAwait(false);
     }
 
-    public async Task BootstrapInternalAsync(IEnumerable<string> allTenants) 
+    public async Task BootstrapInternalAsync(IEnumerable<string> allTenants)
     {
         using (var connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
         using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
@@ -147,13 +147,12 @@ public abstract class RabbitMqStartup<T> : IInceptionStartup
 
     private async Task RecoverModelAsync(string queueName, IChannel channel, IEnumerable<ISubscriber> subscribers, IEnumerable<string> allTenants)
     {
-        var messageTypes = subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct().ToList();
+        var messageTypes = subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Where(mt => typeof(ISystemMessage).IsAssignableFrom(mt) == isSystemQueue).Distinct();
 
         var publishToExchangeGroups = messageTypes
             .SelectMany(mt => bcRabbitMqNamer.Get_ExchangeNames_To_Declare(mt).Select(x => new { Exchange = x, MessageType = mt }))
             .GroupBy(x => x.Exchange)
-            .Distinct()
-            .ToList();
+            .Distinct();
 
         foreach (var publishExchangeGroup in publishToExchangeGroups)
         {

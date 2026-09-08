@@ -71,13 +71,12 @@ public class NodeBroadcast_Startup : IInceptionStartup
 
     private async Task RecoverModelAsync(string queueName, IChannel channel, IEnumerable<ISubscriber> subscribers, IEnumerable<string> allTenants)
     {
-        List<Type> messageTypes = subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Distinct().ToList();
+        IEnumerable<Type> messageTypes = subscribers.SelectMany(x => x.GetInvolvedMessageTypes()).Distinct();
 
         var publishToExchangeGroups = messageTypes
             .SelectMany(mt => bcRabbitMqNamer.Get_ExchangeNames_To_Declare(mt).Select(x => new { Exchange = x, MessageType = mt }))
             .GroupBy(x => x.Exchange)
-            .Distinct()
-            .ToList();
+            .Distinct();
 
         foreach (var publishExchangeGroup in publishToExchangeGroups)
         {
