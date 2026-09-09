@@ -49,9 +49,12 @@ public class ConsumerFactory<T>
     public async Task CreateAndStartConsumersAsync(CancellationToken cancellationToken)
     {
         bool isTrigger = typeof(T).IsAssignableFrom(typeof(ITrigger));
+        bool isNodeBroadcast = typeof(T).IsAssignableFrom(typeof(INodeBroadcast));
 
         if (isTrigger)
             await CreateAndStartTriggerConsumersAsync().ConfigureAwait(false);
+        else if (isNodeBroadcast)
+            await CreateAndStartNodeBroadcastConsumersAsync().ConfigureAwait(false);
         else
             await CreateAndStartNormalConsumersAsync().ConfigureAwait(false);
 
@@ -118,6 +121,21 @@ public class ConsumerFactory<T>
 
         var theRestOfTheSubscribers = subscriberCollection.Subscribers.Except(subscribersWithDedicatedQueues);
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
+        {
+            string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
+            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
+
+            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
+            consumers.Add(asyncListener);
+
+            await asyncListener.StartAsync();
+        }
+    }
+
+    private async Task CreateAndStartNodeBroadcastConsumersAsync()
+    {
+        string queueName = bcRabbitMqNamer.Get_NodeBroadcast_QueueName(typeof(T));
+        for (int i = 0; i < consumerOptions.NodeBroadcastWorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
             IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
