@@ -48,14 +48,14 @@ public class PublisherChannelResolver
         if (string.IsNullOrEmpty(boundedContext)) throw new ArgumentNullException(nameof(boundedContext));
         if (publish is null) throw new ArgumentNullException(nameof(publish));
 
+        string connectionKey = options.GetConnectionKey(ConnectionResolver.Publish);
         try
         {
-            string connectionKey = options.GetConnectionKey(ConnectionResolver.Publish);
             return await UseChannelWithRetriesAsync(DateTimeOffset.UtcNow, 1, exchange, options, boundedContext, connectionKey, publish);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{options.BaseConnectionKey}'");
+            logger.LogError(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{connectionKey}'");
             return false;
         }
     }
