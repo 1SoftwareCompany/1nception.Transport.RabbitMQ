@@ -18,7 +18,7 @@ public class ConsumerPerQueueChannelResolver : IChannelResolverBase // channels 
         this.connectionResolver = connectionResolver;
     }
 
-    public virtual async Task<IChannel> ResolveAsync(string resolveKey, IRabbitMqOptions options, string boundedContext)
+    public virtual async Task<IChannel> ResolveAsync(string resolveKey, IRabbitMqOptions options, string boundedContext, string connectionKey)
     {
         resolveKey = resolveKey.ToLower();
 
@@ -42,7 +42,7 @@ public class ConsumerPerQueueChannelResolver : IChannelResolverBase // channels 
             {
                 var channelOpts = new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
 
-                IConnection connection = await connectionResolver.ResolveAsync(options).ConfigureAwait(true);
+                IConnection connection = await connectionResolver.ResolveAsync(options, connectionKey).ConfigureAwait(true);
                 IChannel scopedChannel = await connection.CreateChannelAsync(channelOpts).ConfigureAwait(true);
 
                 channels.Add(resolveKey, scopedChannel);

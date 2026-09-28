@@ -35,15 +35,18 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
         this.logger = logger;
     }
 
-    public Task<IConnection> CreateConnectionAsync()
+    public Task<IConnection> CreateConnectionAsync(string connectionName = null)
     {
-        return CreateConnectionWithOptionsAsync(options);
+        return CreateConnectionWithOptionsAsync(options, connectionName);
     }
 
-    public async Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options)
+    public async Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options, string connectionName = null)
     {
         if (logger.IsEnabled(LogLevel.Debug))
             logger.LogDebug("Loaded RabbitMQ options are {@Options}", options);
+
+        if (string.IsNullOrEmpty(connectionName))
+            connectionName = "temp";
 
         bool tailRecursion = false;
 
@@ -59,7 +62,7 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
                 connectionFactory.AutomaticRecoveryEnabled = true;
                 connectionFactory.Ssl.Enabled = options.UseSsl;
                 connectionFactory.EndpointResolverFactory = (_) => MultipleEndpointResolver.ComposeEndpointResolver(options);
-                connectionFactory.ClientProvidedName = options.ConnectionKey;
+                connectionFactory.ClientProvidedName = connectionName;
 
                 // Always await within a try/catch to handle possible exceptions
                 IConnection newConnection = await connectionFactory.CreateConnectionAsync();

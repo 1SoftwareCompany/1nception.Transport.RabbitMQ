@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 
 namespace One.Inception.Transport.RabbitMQ;
 
@@ -17,6 +18,9 @@ public class ConnectionResolver : IDisposable
     private readonly IRabbitMqConnectionFactory connectionFactory;
     private readonly ILogger<ConnectionResolver> logger;
 
+    internal const string Publish = "publish";
+    internal const string Consume = "consume";
+
     public ConnectionResolver(IRabbitMqConnectionFactory connectionFactory, ILogger<ConnectionResolver> logger, CancellationToken cancellationToken = default)
     {
         connectionsPerVHost = new ConcurrentDictionary<string, IConnection>();
@@ -24,27 +28,27 @@ public class ConnectionResolver : IDisposable
         this.logger = logger;
     }
 
-    public async Task<IConnection> ResolveAsync(IRabbitMqOptions options, CancellationToken cancellationToken = default)
+    public async Task<IConnection> ResolveAsync(IRabbitMqOptions options, string connectionKey, CancellationToken cancellationToken = default)
     {
-        IConnection connection = GetExistingConnection(options);
+        IConnection connection = GetExistingConnection(connectionKey);
         if (connection is not null)
         {
             if (connection.IsOpen)
                 return connection;
 
-            SemaphoreSlim recoveryGate = gatesForRecoveryWait.GetOrAdd(options.ConnectionKey, _ => new SemaphoreSlim(1, 1));
+            SemaphoreSlim recoveryGate = gatesForRecoveryWait.GetOrAdd(connectionKey, _ => new SemaphoreSlim(1, 1));
             await recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
                 while (connection.IsOpen == false)
                 {
-                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 500 ms. Key: {connectionKey}", options.ConnectionKey);
+                    logger.LogError("Connection to RMQ is down... Automatic attempt to auto recover is in process... Will check again after 500 ms. Key: {connectionKey}", connectionKey);
                     await Task.Delay(500, cancellationToken).ConfigureAwait(false);
 
                     if (connection.IsOpen)
                     {
-                        logger.LogInformation("Connection to RMQ is open after recovery... Key: {connectionKey}", options.ConnectionKey);
+                        logger.LogInformation("Connection to RMQ is open after recovery... Key: {connectionKey}", connectionKey);
                         return connection;
                     }
                 }
@@ -55,14 +59,14 @@ public class ConnectionResolver : IDisposable
             }
         }
 
-        SemaphoreSlim lockPerConnection = gatesPerConnectionKeyCreation.GetOrAdd(options.ConnectionKey, _ => new SemaphoreSlim(1, 1));
+        SemaphoreSlim lockPerConnection = gatesPerConnectionKeyCreation.GetOrAdd(connectionKey, _ => new SemaphoreSlim(1, 1));
         await lockPerConnection.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            connection = GetExistingConnection(options);
+            connection = GetExistingConnection(connectionKey);
             if (connection is null)
-                connection = await CreateConnectionAsync(options).ConfigureAwait(false);
+                connection = await CreateConnectionAsync(options, connectionKey).ConfigureAwait(false);
 
             if (connection is null)
                 throw new InvalidOperationException("Failed to create or retrieve a RabbitMQ connection.");
@@ -75,14 +79,14 @@ public class ConnectionResolver : IDisposable
         }
     }
 
-    private IConnection GetExistingConnection(IRabbitMqOptions options)
+    private IConnection GetExistingConnection(string key)
     {
-        connectionsPerVHost.TryGetValue(options.ConnectionKey, out IConnection connection);
+        connectionsPerVHost.TryGetValue(key, out IConnection connection);
 
         return connection;
     }
 
-    private async Task<IConnection> CreateConnectionAsync(IRabbitMqOptions options)
+    private async Task<IConnection> CreateConnectionAsync(IRabbitMqOptions options, string key)
     {
         if (logger.IsEnabled(LogLevel.Debug))
         {
@@ -90,22 +94,22 @@ public class ConnectionResolver : IDisposable
             logger.LogDebug(connectionPoolInfo);
         }
 
-        IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options).ConfigureAwait(false);
-        if (connectionsPerVHost.TryAdd(options.ConnectionKey, connection))
+        IConnection connection = await connectionFactory.CreateConnectionWithOptionsAsync(options, key).ConfigureAwait(false);
+        if (connectionsPerVHost.TryAdd(key, connection))
         {
             if (logger.IsEnabled(LogLevel.Debug))
             {
                 string connectionPoolInfo = $"Connection Pool Info: {string.Join(", ", connectionsPerVHost.Keys)}";
                 logger.LogDebug(connectionPoolInfo);
             }
-            SubscribeToConnectionEvents(options.ConnectionKey, connection);
+            SubscribeToConnectionEvents(key, connection);
             return connection;
         }
         else
         {
             await connection.CloseAsync().ConfigureAwait(false);
 
-            return GetExistingConnection(options);
+            return GetExistingConnection(key);
         }
     }
 
@@ -119,7 +123,11 @@ public class ConnectionResolver : IDisposable
 
         connection.ConnectionShutdownAsync += (sender, ea) =>
         {
-            logger.LogError("RabbitMQ connection {ConnectionKey} shut down. Initiator={Initiator}, Code={ReplyCode}, Text={ReplyText}", key, ea.Initiator, ea.ReplyCode, ea.ReplyText);
+            if (IsAppShuttingDownGracefully(ea) == false)
+                logger.LogError("RabbitMQ connection {ConnectionKey} shut down. Initiator={Initiator}, Code={ReplyCode}, Text={ReplyText}", key, ea.Initiator, ea.ReplyCode, ea.ReplyText);
+            else
+                logger.LogInformation("RabbitMQ connection {ConnectionKey} shut down. Initiator={Initiator}, Code={ReplyCode}, Text={ReplyText}", key, ea.Initiator, ea.ReplyCode, ea.ReplyText);
+
             return Task.CompletedTask;
         };
 
@@ -143,6 +151,10 @@ public class ConnectionResolver : IDisposable
             return Task.CompletedTask;
         };
 
+        bool IsAppShuttingDownGracefully(ShutdownEventArgs ea)
+        {
+            return ea.Initiator == ShutdownInitiator.Application && ea.ReplyCode == 200 && ea.ReplyText.Equals("Goodbye", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     public void Dispose()

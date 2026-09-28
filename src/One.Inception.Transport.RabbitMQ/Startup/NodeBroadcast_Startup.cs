@@ -20,12 +20,13 @@ public class NodeBroadcast_Startup : IInceptionStartup
     private readonly BoundedContextRabbitMqNamer bcRabbitMqNamer;
     private readonly ILogger<NodeBroadcast_Startup> logger;
     private readonly RabbitMqConsumerOptions consumerOptions;
-
+    private readonly ConnectionResolver connectionResolver;
+    private readonly RabbitMqOptions options;
     private TenantsOptions tenantsOptions;
 
     private readonly string regularQueueName;
 
-    public NodeBroadcast_Startup(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, ISubscriberCollection<INodeBroadcast> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<NodeBroadcast_Startup> logger)
+    public NodeBroadcast_Startup(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ISubscriberCollection<INodeBroadcast> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<NodeBroadcast_Startup> logger, ConnectionResolver connectionResolver)
     {
         this.tenantsOptions = tenantsOptionsMonitor.CurrentValue;
         this.boundedContext = boundedContext.CurrentValue;
@@ -34,10 +35,12 @@ public class NodeBroadcast_Startup : IInceptionStartup
         this.bcRabbitMqNamer = bcRabbitMqNamer;
         this.logger = logger;
         this.consumerOptions = consumerOptions.CurrentValue;
+        this.options = optionsMonitor.CurrentValue;
 
         regularQueueName = bcRabbitMqNamer.Get_NodeBroadcast_QueueName(typeof(INodeBroadcast));
 
         tenantsOptionsMonitor.OnChange(TenantOptionsChanges);
+        this.connectionResolver = connectionResolver;
     }
 
     public async Task BootstrapAsync()
@@ -62,7 +65,8 @@ public class NodeBroadcast_Startup : IInceptionStartup
 
     public async Task BootstrapInternalAsync(IEnumerable<string> allTenants)
     {
-        using (var connection = await connectionFactory.CreateConnectionAsync().ConfigureAwait(false))
+        string key = options.GetConnectionKey(ConnectionResolver.Consume); // just reusing the same long lived connection, so that autorecovery will re-create the queue (its not durable). otherwise it will fail.
+        IConnection connection = await connectionResolver.ResolveAsync(options, key).ConfigureAwait(true);
         using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
         {
             await RecoverModelAsync(regularQueueName, channel, subscriberCollection.Subscribers, allTenants).ConfigureAwait(false);

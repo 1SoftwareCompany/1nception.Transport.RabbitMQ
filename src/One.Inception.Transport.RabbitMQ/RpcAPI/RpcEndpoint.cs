@@ -86,7 +86,9 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
             for (int workerNumber = 0; workerNumber < consumerOptions.RpcWorkersCount; workerNumber++)
             {
                 string workerChannelKey = $"{route}_{workerNumber}";
-                IChannel requestChannel = await channelResolver.ResolveAsync(workerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
+                string connectionKey = scopedOptions.GetConnectionKey(ConnectionResolver.Consume);
+
+                IChannel requestChannel = await channelResolver.ResolveAsync(workerChannelKey, scopedOptions, options.VHost, connectionKey).ConfigureAwait(false);
 
                 server = new RequestConsumer<TRequest, TResponse>(route, requestChannel, factory, serializer, serviceProvider, logger);
                 await server.StartAsync().ConfigureAwait(false);
@@ -127,7 +129,9 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
                     if (cfgFound.HasValue && cfgFound.Value)
                     {
                         IRabbitMqOptions scopedOptions = options.GetOptionsFor(destinationBC);
-                        IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, destinationBC).ConfigureAwait(false);
+                        string connectionKey = scopedOptions.GetConnectionKey(ConnectionResolver.Consume);
+
+                        IChannel requestChannel = await channelResolver.ResolveAsync(route, scopedOptions, destinationBC, connectionKey).ConfigureAwait(false);
                         client = new ResponseConsumer<TRequest, TResponse>(route, requestChannel, serializer, logger);
                         await client.StartAsync().ConfigureAwait(false);
 

@@ -62,12 +62,17 @@ public class RabbitMqOptions : IRabbitMqOptions
         return this;
     }
 
-    private string _connectionKey;
-    public string ConnectionKey => _connectionKey ?? BuildConnectionKey();
+    private string _baseConnectionKey;
+    public string BaseConnectionKey => _baseConnectionKey ?? BuildConnectionKey();
     private string BuildConnectionKey()
     {
-        _connectionKey = $"{VHost}_{Server}".ToLower();
-        return _connectionKey;
+        _baseConnectionKey = $"{VHost}_{Server}".ToLower();
+        return _baseConnectionKey;
+    }
+
+    public string GetConnectionKey(string type)
+    {
+        return BaseConnectionKey + $"_{type}";
     }
 }
 
