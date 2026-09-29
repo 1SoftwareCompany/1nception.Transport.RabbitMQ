@@ -24,7 +24,7 @@ public interface IRabbitMqOptions
     /// </summary>
     int TimeoutForChannelLease { get; set; }
 
+    public string BaseConnectionKey { get; }
 
-    public string ConnectionKey { get; }
-
+    public string GetConnectionKey(string type);
 }

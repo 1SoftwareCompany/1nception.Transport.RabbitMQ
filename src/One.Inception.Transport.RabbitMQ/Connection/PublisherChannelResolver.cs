@@ -28,14 +28,14 @@ public class PublisherChannelResolver
         declaredExchanges = new ConcurrentDictionary<string, IChannel>();
     }
 
-    private SemaphoreSlim GetSlotLock(IRabbitMqOptions options)
+    private SemaphoreSlim GetSlotLock(IRabbitMqOptions options, string connectionKey)
     {
         SemaphoreSlim slotsLock = null;
 
-        if (connectionsWithSlots.TryGetValue(options.ConnectionKey, out slotsLock) == false)
+        if (connectionsWithSlots.TryGetValue(connectionKey, out slotsLock) == false)
         {
             slotsLock = new SemaphoreSlim(options.MaxChannelsForPublish, options.MaxChannelsForPublish);
-            connectionsWithSlots.TryAdd(options.ConnectionKey, slotsLock);
+            connectionsWithSlots.TryAdd(connectionKey, slotsLock);
         }
 
         return slotsLock;
@@ -48,18 +48,19 @@ public class PublisherChannelResolver
         if (string.IsNullOrEmpty(boundedContext)) throw new ArgumentNullException(nameof(boundedContext));
         if (publish is null) throw new ArgumentNullException(nameof(publish));
 
+        string connectionKey = options.GetConnectionKey(ConnectionResolver.Publish);
         try
         {
-            return await UseChannelWithRetriesAsync(DateTimeOffset.UtcNow, 1, exchange, options, boundedContext, publish);
+            return await UseChannelWithRetriesAsync(DateTimeOffset.UtcNow, 1, exchange, options, boundedContext, connectionKey, publish);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{options.ConnectionKey}'");
+            logger.LogError(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{connectionKey}'");
             return false;
         }
     }
 
-    private async Task<bool> UseChannelWithRetriesAsync(DateTimeOffset initialTry, ushort currentTry, string exchange, IRabbitMqOptions options, string boundedContext, Func<IChannel, Task> publish)
+    private async Task<bool> UseChannelWithRetriesAsync(DateTimeOffset initialTry, ushort currentTry, string exchange, IRabbitMqOptions options, string boundedContext, string connectionKey, Func<IChannel, Task> publish)
     {
         bool shouldRetry = false;
         IChannel channel = null;
@@ -68,7 +69,7 @@ public class PublisherChannelResolver
             if (currentTry > 1)
                 await Task.Delay(KillBill.RecoveryInterval).ConfigureAwait(false);
 
-            channel = await RentAsync(options, exchange);
+            channel = await RentAsync(options, exchange, connectionKey);
             await publish(channel);
 
             return true;
@@ -78,21 +79,21 @@ public class PublisherChannelResolver
             shouldRetry = ShouldRetry(initialTry, currentTry);
             if (shouldRetry)
             {
-                logger.LogWarning(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{options.ConnectionKey}'. Attempt {currentTry} of {KillBill.MaxPublishRetries}. Retrying...");
+                logger.LogWarning(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{connectionKey}'. Attempt {currentTry} of {KillBill.MaxPublishRetries}. Retrying...");
             }
             else
             {
-                logger.LogError(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{options.ConnectionKey}'. Attempt {currentTry} of {KillBill.MaxPublishRetries}. No more retries left.");
+                logger.LogError(ex, $"Failed to publish message to exchange '{exchange}' on bounded context '{boundedContext}' using connection '{connectionKey}'. Attempt {currentTry} of {KillBill.MaxPublishRetries}. No more retries left.");
             }
         }
         finally
         {
-            await ReturnAsync(options, channel).ConfigureAwait(false);
+            await ReturnAsync(options, channel, connectionKey).ConfigureAwait(false);
         }
 
         if (shouldRetry)
         {
-            return await UseChannelWithRetriesAsync(initialTry, currentTry++, exchange, options, boundedContext, publish);
+            return await UseChannelWithRetriesAsync(initialTry, currentTry++, exchange, options, boundedContext, connectionKey, publish);
         }
 
         return false;
@@ -116,7 +117,7 @@ public class PublisherChannelResolver
         }
     }
 
-    private async Task ReturnAsync(IRabbitMqOptions options, IChannel channel)
+    private async Task ReturnAsync(IRabbitMqOptions options, IChannel channel, string connectionKey)
     {
         try
         {
@@ -126,17 +127,17 @@ public class PublisherChannelResolver
                 return;
             }
 
-            if (connectionsWithChannels.TryGetValue(options.ConnectionKey, out ConcurrentBag<IChannel> idleChannels))
+            if (connectionsWithChannels.TryGetValue(connectionKey, out ConcurrentBag<IChannel> idleChannels))
             {
                 idleChannels.Add(channel);
 
                 if (logger.IsEnabled(LogLevel.Debug))
-                    logger.LogDebug($"Return channel => {options.ConnectionKey} {connectionsWithChannels.Count}/{connectionsWithSlots.Count}");
+                    logger.LogDebug($"Return channel => {connectionKey} {connectionsWithChannels.Count}/{connectionsWithSlots.Count}");
             }
         }
         finally
         {
-            if (connectionsWithSlots.TryGetValue(options.ConnectionKey, out SemaphoreSlim slotsLock))
+            if (connectionsWithSlots.TryGetValue(connectionKey, out SemaphoreSlim slotsLock))
             {
                 if (slotsLock is not null)
                     slotsLock.Release();
@@ -144,14 +145,14 @@ public class PublisherChannelResolver
         }
     }
 
-    private async Task<IChannel> RentAsync(IRabbitMqOptions options, string exchange)
+    private async Task<IChannel> RentAsync(IRabbitMqOptions options, string exchange, string connectionKey)
     {
-        SemaphoreSlim slotsLock = GetSlotLock(options);
+        SemaphoreSlim slotsLock = GetSlotLock(options, connectionKey);
 
         bool lockIsAcquired = await slotsLock.WaitAsync(TimeSpan.FromSeconds(options.TimeoutForChannelLease)).ConfigureAwait(false);
         if (lockIsAcquired)
         {
-            IChannel channel = await TakeHealthyOrCreateAsync(options, exchange).ConfigureAwait(false);
+            IChannel channel = await TakeHealthyOrCreateAsync(options, exchange, connectionKey).ConfigureAwait(false);
 
             return channel;
         }
@@ -161,9 +162,9 @@ public class PublisherChannelResolver
         }
     }
 
-    private async Task<IChannel> TakeHealthyOrCreateAsync(IRabbitMqOptions options, string exchange)
+    private async Task<IChannel> TakeHealthyOrCreateAsync(IRabbitMqOptions options, string exchange, string connectionKey)
     {
-        if (connectionsWithChannels.TryGetValue(options.ConnectionKey, out ConcurrentBag<IChannel> idleChannels))
+        if (connectionsWithChannels.TryGetValue(connectionKey, out ConcurrentBag<IChannel> idleChannels))
         {
             while (idleChannels.TryTake(out IChannel candidate))
             {
@@ -175,17 +176,17 @@ public class PublisherChannelResolver
         }
         else
         {
-            connectionsWithChannels.TryAdd(options.ConnectionKey, new ConcurrentBag<IChannel>());
+            connectionsWithChannels.TryAdd(connectionKey, new ConcurrentBag<IChannel>());
         }
 
-        return await CreateChannelAsync(options).ConfigureAwait(false);
+        return await CreateChannelAsync(options, connectionKey).ConfigureAwait(false);
 
-        async Task<IChannel> CreateChannelAsync(IRabbitMqOptions options)
+        async Task<IChannel> CreateChannelAsync(IRabbitMqOptions options, string connectionKey)
         {
-            var connection = await connectionResolver.ResolveAsync(options).ConfigureAwait(false);
+            var connection = await connectionResolver.ResolveAsync(options, connectionKey).ConfigureAwait(false);
             var channelOpts = new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
             if (logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug($"Create channel => {options.ConnectionKey} {connectionsWithChannels.Count}/{connectionsWithSlots.Count}");
+                logger.LogDebug($"Create channel => {connectionKey} {connectionsWithChannels.Count}/{connectionsWithSlots.Count}");
 
             return await connection.CreateChannelAsync(channelOpts);
         }

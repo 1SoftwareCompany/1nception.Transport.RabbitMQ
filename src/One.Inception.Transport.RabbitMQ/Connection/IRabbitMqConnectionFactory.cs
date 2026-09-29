@@ -5,6 +5,6 @@ namespace One.Inception.Transport.RabbitMQ;
 
 public interface IRabbitMqConnectionFactory
 {
-    Task<IConnection> CreateConnectionAsync();
-    Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options);
+    Task<IConnection> CreateConnectionAsync(string connectionName = null);
+    Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options, string connectionName = null);
 }

@@ -5,5 +5,5 @@ namespace One.Inception.Transport.RabbitMQ;
 
 public interface IChannelResolverBase
 {
-    Task<IChannel> ResolveAsync(string resolveKey, IRabbitMqOptions options, string boundedContext);
+    Task<IChannel> ResolveAsync(string resolveKey, IRabbitMqOptions options, string boundedContext, string connectionKey);
 }

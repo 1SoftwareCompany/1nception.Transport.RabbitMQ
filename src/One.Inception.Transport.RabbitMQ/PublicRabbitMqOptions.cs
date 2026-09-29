@@ -80,12 +80,17 @@ public class PublicRabbitMqOptions : IRabbitMqOptions
         yield return $"amqp://{Username}:{Password}@localhost:{PortDefault}/{VHost}";
     }
 
-    private string _connectionKey;
-    public string ConnectionKey => _connectionKey ?? BuildConnectionKey();
+    private string _baseConnectionKey;
+    public string BaseConnectionKey => _baseConnectionKey ?? BuildConnectionKey();
     private string BuildConnectionKey()
     {
-        _connectionKey = $"public_{VHost}_{Server}".ToLower();
-        return _connectionKey;
+        _baseConnectionKey = $"public_{VHost}_{Server}".ToLower();
+        return _baseConnectionKey;
+    }
+
+    public string GetConnectionKey(string type)
+    {
+        return BaseConnectionKey + $"_{type}";
     }
 }
 

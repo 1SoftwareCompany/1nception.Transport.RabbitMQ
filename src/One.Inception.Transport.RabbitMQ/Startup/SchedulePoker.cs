@@ -23,9 +23,11 @@ public class SchedulePoker<T> //where T : IMessageHandler
     {
         try
         {
+
             while (cancellationToken.IsCancellationRequested == false)
             {
-                IConnection connection = await connectionResolver.ResolveAsync(rmqOptionsMonitor.CurrentValue).ConfigureAwait(false); // all scheduled queues will share 1 connection
+                string connectionKey = rmqOptionsMonitor.CurrentValue.GetConnectionKey(ConnectionResolver.Consume);
+                IConnection connection = await connectionResolver.ResolveAsync(rmqOptionsMonitor.CurrentValue, connectionKey).ConfigureAwait(false); // all scheduled queues will share 1 connection
 
                 using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
                 {

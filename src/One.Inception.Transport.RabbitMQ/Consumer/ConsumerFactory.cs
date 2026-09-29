@@ -66,6 +66,8 @@ public class ConsumerFactory<T>
         IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
 
         IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
+        string connectionKey = scopedOptions.GetConnectionKey(ConnectionResolver.Consume);
+
         if (subscribersWithDedicatedQueues.Any())
         {
             foreach (var subscriber in subscribersWithDedicatedQueues)
@@ -75,7 +77,8 @@ public class ConsumerFactory<T>
                 for (int i = 0; i < consumerOptions.WorkersCount; i++)
                 {
                     string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}";
-                    IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
+
+                    IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost, connectionKey).ConfigureAwait(false);
 
                     AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
 
@@ -89,7 +92,7 @@ public class ConsumerFactory<T>
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
-            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost).ConfigureAwait(false);
+            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost, connectionKey).ConfigureAwait(false);
 
             AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
             consumers.Add(asyncListener);
@@ -101,6 +104,8 @@ public class ConsumerFactory<T>
     private async Task CreateAndStartNormalConsumersAsync()
     {
         IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
+        string connectionKey = options.GetConnectionKey(ConnectionResolver.Consume);
+
         if (subscribersWithDedicatedQueues.Any())
         {
             foreach (ISubscriber subscriber in subscribersWithDedicatedQueues)
@@ -109,7 +114,7 @@ public class ConsumerFactory<T>
                 for (int i = 0; i < consumerOptions.WorkersCount; i++)
                 {
                     string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}";
-                    IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
+                    IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost, connectionKey).ConfigureAwait(false);
 
                     AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
                     consumers.Add(asyncListener);
@@ -123,7 +128,7 @@ public class ConsumerFactory<T>
         for (int i = 0; i < consumerOptions.WorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
-            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
+            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost, connectionKey).ConfigureAwait(false);
 
             AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
             consumers.Add(asyncListener);
@@ -134,11 +139,13 @@ public class ConsumerFactory<T>
 
     private async Task CreateAndStartNodeBroadcastConsumersAsync()
     {
+        string connectionKey = options.GetConnectionKey(ConnectionResolver.Consume);
+
         string queueName = bcRabbitMqNamer.Get_NodeBroadcast_QueueName(typeof(T));
         for (int i = 0; i < consumerOptions.NodeBroadcastWorkersCount; i++)
         {
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
-            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost).ConfigureAwait(false);
+            IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost, connectionKey).ConfigureAwait(false);
 
             AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
             consumers.Add(asyncListener);
