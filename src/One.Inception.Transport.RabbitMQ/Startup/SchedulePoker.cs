@@ -2,8 +2,8 @@
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System;
-using System.Threading.Tasks;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.Startup;
 
@@ -11,7 +11,6 @@ public class SchedulePoker<T> //where T : IMessageHandler
 {
     private readonly IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor;
     private readonly ConnectionResolver connectionResolver;
-    AsyncEventingBasicConsumer consumer;
 
     public SchedulePoker(IOptionsMonitor<RabbitMqOptions> rmqOptionsMonitor, ConnectionResolver connectionResolver)
     {
@@ -21,35 +20,37 @@ public class SchedulePoker<T> //where T : IMessageHandler
 
     public async Task PokeAsync(string queueName, CancellationToken cancellationToken)
     {
-        try
+        while (cancellationToken.IsCancellationRequested == false)
         {
-
-            while (cancellationToken.IsCancellationRequested == false)
+            try
             {
                 string connectionKey = rmqOptionsMonitor.CurrentValue.GetConnectionKey(ConnectionResolver.Consume);
-                IConnection connection = await connectionResolver.ResolveAsync(rmqOptionsMonitor.CurrentValue, connectionKey).ConfigureAwait(false); // all scheduled queues will share 1 connection
+                IConnection connection = await connectionResolver.ResolveAsync(rmqOptionsMonitor.CurrentValue, connectionKey, cancellationToken).ConfigureAwait(false);
 
-                using (IChannel channel = await connection.CreateChannelAsync().ConfigureAwait(false))
+                await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                consumer.ReceivedAsync += AsyncListener_Received;
+                await channel.BasicConsumeAsync(queueName, autoAck: false, consumer: consumer, cancellationToken).ConfigureAwait(false);
+
+                await Task.Delay(30000, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                try
                 {
-                    try
-                    {
-                        consumer = new AsyncEventingBasicConsumer(channel);
-                        consumer.ReceivedAsync += AsyncListener_Received;
-
-                        string consumerTag = await channel.BasicConsumeAsync(queue: queueName, autoAck: false, consumer: consumer).ConfigureAwait(false);
-
-                        await Task.Delay(30000, cancellationToken).ConfigureAwait(false);
-
-                        consumer.ReceivedAsync -= AsyncListener_Received;
-                    }
-                    catch (Exception)
-                    {
-                        await Task.Delay(5000).ConfigureAwait(false);
-                    }
+                    await Task.Delay(5000, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
                 }
             }
         }
-        catch (Exception) { }
     }
 
     private Task AsyncListener_Received(object sender, BasicDeliverEventArgs @event)
