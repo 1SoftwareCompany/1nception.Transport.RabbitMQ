@@ -14,27 +14,21 @@ namespace One.Inception.Transport.RabbitMQ.Startup;
 [InceptionStartup(Bootstraps.Configuration)]
 public class NodeBroadcast_Startup : IInceptionStartup
 {
-    private readonly BoundedContext boundedContext;
     private readonly ISubscriberCollection<INodeBroadcast> subscriberCollection;
-    private readonly IRabbitMqConnectionFactory connectionFactory;
     private readonly BoundedContextRabbitMqNamer bcRabbitMqNamer;
     private readonly ILogger<NodeBroadcast_Startup> logger;
-    private readonly RabbitMqConsumerOptions consumerOptions;
     private readonly ConnectionResolver connectionResolver;
     private readonly RabbitMqOptions options;
     private TenantsOptions tenantsOptions;
 
     private readonly string regularQueueName;
 
-    public NodeBroadcast_Startup(IOptionsMonitor<RabbitMqConsumerOptions> consumerOptions, IOptionsMonitor<BoundedContext> boundedContext, IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ISubscriberCollection<INodeBroadcast> subscriberCollection, IRabbitMqConnectionFactory connectionFactory, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<NodeBroadcast_Startup> logger, ConnectionResolver connectionResolver)
+    public NodeBroadcast_Startup(IOptionsMonitor<TenantsOptions> tenantsOptionsMonitor, IOptionsMonitor<RabbitMqOptions> optionsMonitor, ISubscriberCollection<INodeBroadcast> subscriberCollection, BoundedContextRabbitMqNamer bcRabbitMqNamer, ILogger<NodeBroadcast_Startup> logger, ConnectionResolver connectionResolver)
     {
         this.tenantsOptions = tenantsOptionsMonitor.CurrentValue;
-        this.boundedContext = boundedContext.CurrentValue;
         this.subscriberCollection = subscriberCollection;
-        this.connectionFactory = connectionFactory;
         this.bcRabbitMqNamer = bcRabbitMqNamer;
         this.logger = logger;
-        this.consumerOptions = consumerOptions.CurrentValue;
         this.options = optionsMonitor.CurrentValue;
 
         regularQueueName = bcRabbitMqNamer.Get_NodeBroadcast_QueueName(typeof(INodeBroadcast));
@@ -87,7 +81,7 @@ public class NodeBroadcast_Startup : IInceptionStartup
             await channel.ExchangeDeclareAsync(publishExchangeGroup.Key, PipelineType.Fanout.ToString(), false).ConfigureAwait(false); // The exchange and the queues must not be durable, because they will be per node and the node can be destroyed at any time. The messages will be lost, but this is expected behavior for node broadcast messages.
         }
 
-        await channel.QueueDeclareAsync(queueName, false, false, true, null).ConfigureAwait(false); // The exchange and the queues must not be durable, because they will be per node and the node can be destroyed at any time. The messages will be lost, but this is expected behavior for node broadcast messages.
+        await channel.QueueDeclareAsync(queueName, false, true, true, null).ConfigureAwait(false); // The exchange and the queues must not be durable, because they will be per node and the node can be destroyed at any time. The messages will be lost, but this is expected behavior for node broadcast messages.
         foreach (var publishExchangeGroup in publishToExchangeGroups)
         {
             await channel.QueueBindAsync(queueName, publishExchangeGroup.Key, string.Empty).ConfigureAwait(false);
