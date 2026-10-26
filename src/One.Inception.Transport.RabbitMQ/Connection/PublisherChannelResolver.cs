@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using System;
@@ -30,15 +29,7 @@ public class PublisherChannelResolver
 
     private SemaphoreSlim GetSlotLock(IRabbitMqOptions options, string connectionKey)
     {
-        SemaphoreSlim slotsLock = null;
-
-        if (connectionsWithSlots.TryGetValue(connectionKey, out slotsLock) == false)
-        {
-            slotsLock = new SemaphoreSlim(options.MaxChannelsForPublish, options.MaxChannelsForPublish);
-            connectionsWithSlots.TryAdd(connectionKey, slotsLock);
-        }
-
-        return slotsLock;
+        return connectionsWithSlots.GetOrAdd(connectionKey, _ => new SemaphoreSlim(options.MaxChannelsForPublish, options.MaxChannelsForPublish)); // this guarantees that all callers get the same semaphore, even when they race on the first call for a connection
     }
 
     public async Task<bool> UseChannelAsync(string exchange, IRabbitMqOptions options, string boundedContext, Func<IChannel, Task> publish)
