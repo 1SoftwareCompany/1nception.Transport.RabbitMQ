@@ -24,11 +24,11 @@
     <RootNamespace>One.Inception.Transport.RabbitMQ</RootNamespace>
     <NeutralLanguage>en-US</NeutralLanguage>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <AssemblyVersion>13.0.0</AssemblyVersion>
+    <AssemblyVersion>14.0.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="1nception" Version="13.2.10" />
+    <PackageReference Include="1nception" Version="14.0.0-preview.1" />
     <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
   </ItemGroup>
 

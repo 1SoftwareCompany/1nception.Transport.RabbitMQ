@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Linq;
+using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,7 +16,7 @@ public interface IRpc
 {
     internal Task StartServerAsync();
 
-    internal Task StopConsumersAsync();
+    internal Task StopConsumersAsync(CancellationToken cancellationToken = default);
 }
 
 public interface IRpc<TRequest, TResponse> : IRpc
@@ -28,7 +31,8 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
     where TResponse : IRpcResponse, new()
 {
     private ResponseConsumer<TRequest, TResponse> client;
-    private RequestConsumer<TRequest, TResponse> server;
+    private string clientStartError;
+    private readonly List<RequestConsumer<TRequest, TResponse>> servers = new();
     private string route;
     private readonly ConsumerPerQueueChannelResolver channelResolver;
     private readonly BoundedContext boundedContext;
@@ -55,13 +59,20 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
 
     public async Task<TResponse> SendAsync(TRequest request)
     {
-        client = client ?? await StartClientAsync().ConfigureAwait(false);
+        ResponseConsumer<TRequest, TResponse> current = client ?? await StartClientAsync().ConfigureAwait(false);
 
         TResponse response = new TResponse();
 
+        if (current is null)
+        {
+            // StartClientAsync already logged the cause with its exception; hand the same reason to the caller instead of a NullReferenceException.
+            response.Error = clientStartError ?? $"Unable to start RPC client for {route}.";
+            return response;
+        }
+
         try
         {
-            response = await client.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(consumerOptions.RpcTimeout)).ConfigureAwait(false);
+            response = await current.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(consumerOptions.RpcTimeout)).ConfigureAwait(false);
         }
         catch (TimeoutException timedOutEx)
         {
@@ -90,7 +101,9 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
 
                 IChannel requestChannel = await channelResolver.ResolveAsync(workerChannelKey, scopedOptions, options.VHost, connectionKey).ConfigureAwait(false);
 
-                server = new RequestConsumer<TRequest, TResponse>(route, requestChannel, factory, serializer, serviceProvider, logger);
+                var stoppingToken = serviceProvider.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+                var server = new RequestConsumer<TRequest, TResponse>(route, requestChannel, factory, serializer, serviceProvider, logger, stoppingToken);
+                servers.Add(server);
                 await server.StartAsync().ConfigureAwait(false);
             }
 
@@ -100,13 +113,15 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
         catch (Exception ex) when (True(() => logger.LogError(ex, "Unable to start rpc server for {rmqroute}.", route))) { }
     }
 
-    async Task IRpc.StopConsumersAsync()
+    async Task IRpc.StopConsumersAsync(CancellationToken cancellationToken)
     {
+        var tasks = servers.Select(server => server.StopAsync(cancellationToken)).ToList();
         if (client is not null)
-            await client.StopAsync().ConfigureAwait(false);
+            tasks.Add(client.StopAsync(cancellationToken));
 
-        if (server is not null)
-            await server.StopAsync().ConfigureAwait(false);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        servers.Clear();
+        client = null;
     }
 
     private static SemaphoreSlim threadGate = new SemaphoreSlim(1, 1);
@@ -149,8 +164,8 @@ public class RpcEndpoint<TRequest, TResponse> : IRpc<TRequest, TResponse>
                 }
             }
         }
-        catch (Exception ex) when (False(() => logger.LogError(ex, "Unable to start RPC client for {rmqroute} to destination BC.", route))) { }
-        catch (Exception) { }
+        catch (Exception ex) when (False(() => logger.LogError(ex, "Unable to start RPC client for {rmqroute}. {reason}", route, ex.Message))) { }
+        catch (Exception ex) { clientStartError = $"Unable to start RPC client for {route}. {ex.Message}"; }
         finally
         {
             threadGate?.Release();

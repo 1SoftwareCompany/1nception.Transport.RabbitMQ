@@ -1,6 +1,7 @@
 ﻿using One.Inception.MessageProcessing;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ;
@@ -13,8 +14,8 @@ public class AsyncConsumer<TSubscriber> : AsyncConsumerBase<TSubscriber>
 {
     private readonly string queue;
 
-    public AsyncConsumer(string queue, IChannel channel, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger)
-        : base(channel, subscriberCollection, serializer, logger)
+    public AsyncConsumer(string queue, IChannel channel, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger, CancellationToken cancellationToken = default)
+        : base(channel, subscriberCollection, serializer, logger, cancellationToken)
     {
         this.queue = queue;
     }
@@ -37,8 +38,8 @@ public class AsyncConsumerForSingleSubscriber : AsyncConsumerCustomForSingleSubs
 {
     private readonly string queue;
 
-    public AsyncConsumerForSingleSubscriber(string queue, IChannel channel, ISubscriber singleSubscriber, ISerializer serializer, ILogger logger)
-        : base(channel, singleSubscriber, serializer, logger)
+    public AsyncConsumerForSingleSubscriber(string queue, IChannel channel, ISubscriber singleSubscriber, ISerializer serializer, ILogger logger, CancellationToken cancellationToken = default)
+        : base(channel, singleSubscriber, serializer, logger, cancellationToken)
     {
         this.queue = queue;
     }

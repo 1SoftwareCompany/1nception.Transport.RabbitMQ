@@ -52,16 +52,16 @@ public class ConsumerFactory<T>
         bool isNodeBroadcast = typeof(T).IsAssignableFrom(typeof(INodeBroadcast));
 
         if (isTrigger)
-            await CreateAndStartTriggerConsumersAsync().ConfigureAwait(false);
+            await CreateAndStartTriggerConsumersAsync(cancellationToken).ConfigureAwait(false);
         else if (isNodeBroadcast)
-            await CreateAndStartNodeBroadcastConsumersAsync().ConfigureAwait(false);
+            await CreateAndStartNodeBroadcastConsumersAsync(cancellationToken).ConfigureAwait(false);
         else
-            await CreateAndStartNormalConsumersAsync().ConfigureAwait(false);
+            await CreateAndStartNormalConsumersAsync(cancellationToken).ConfigureAwait(false);
 
         await CreateAndStartSchedulePokerAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task CreateAndStartTriggerConsumersAsync()
+    private async Task CreateAndStartTriggerConsumersAsync(CancellationToken cancellationToken)
     {
         IRabbitMqOptions scopedOptions = options.GetOptionsFor(boundedContext.Name);
 
@@ -80,7 +80,7 @@ public class ConsumerFactory<T>
 
                     IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost, connectionKey).ConfigureAwait(false);
 
-                    AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
+                    AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger, cancellationToken);
 
                     consumers.Add(asyncListener);
 
@@ -94,14 +94,14 @@ public class ConsumerFactory<T>
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
             IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, scopedOptions, options.VHost, connectionKey).ConfigureAwait(false);
 
-            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
+            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger, cancellationToken);
             consumers.Add(asyncListener);
 
             await asyncListener.StartAsync();
         }
     }
 
-    private async Task CreateAndStartNormalConsumersAsync()
+    private async Task CreateAndStartNormalConsumersAsync(CancellationToken cancellationToken)
     {
         IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
         string connectionKey = options.GetConnectionKey(ConnectionResolver.Consume);
@@ -116,7 +116,7 @@ public class ConsumerFactory<T>
                     string consumerChannelKey = $"{boundedContext.Name}_{subscriber.HandlerType.Name}_{i}";
                     IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost, connectionKey).ConfigureAwait(false);
 
-                    AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger);
+                    AsyncConsumerForSingleSubscriber asyncListener = new AsyncConsumerForSingleSubscriber(queueName, channel, subscriber, serializer, logger, cancellationToken);
                     consumers.Add(asyncListener);
 
                     await asyncListener.StartAsync();
@@ -130,14 +130,14 @@ public class ConsumerFactory<T>
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
             IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost, connectionKey).ConfigureAwait(false);
 
-            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
+            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger, cancellationToken);
             consumers.Add(asyncListener);
 
             await asyncListener.StartAsync();
         }
     }
 
-    private async Task CreateAndStartNodeBroadcastConsumersAsync()
+    private async Task CreateAndStartNodeBroadcastConsumersAsync(CancellationToken cancellationToken)
     {
         string connectionKey = options.GetConnectionKey(ConnectionResolver.Consume);
 
@@ -147,7 +147,7 @@ public class ConsumerFactory<T>
             string consumerChannelKey = $"{boundedContext.Name}_{typeof(T).Name}_{i}";
             IChannel channel = await channelResolver.ResolveAsync(consumerChannelKey, options, options.VHost, connectionKey).ConfigureAwait(false);
 
-            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger);
+            AsyncConsumerBase<T> asyncListener = new AsyncConsumer<T>(queueName, channel, subscriberCollection, serializer, logger, cancellationToken);
             consumers.Add(asyncListener);
 
             await asyncListener.StartAsync();
@@ -204,13 +204,12 @@ public class ConsumerFactory<T>
         }
     }
 
-    public async Task StopAsync()
+    public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        IEnumerable<Task> stopTasks = consumers.Select(consumer => consumer.StopAsync());
+        IEnumerable<Task> stopTasks = consumers.Select(consumer => consumer.StopAsync(cancellationToken));
 
         await Task.WhenAll(stopTasks).ConfigureAwait(false);
 
-        subscriberCollection.UnsubscribeAll();
         consumers.Clear();
     }
 }

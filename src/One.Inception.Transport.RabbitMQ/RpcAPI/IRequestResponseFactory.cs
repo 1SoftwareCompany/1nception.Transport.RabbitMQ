@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,14 +12,14 @@ namespace One.Inception.Transport.RabbitMQ.RpcAPI;
 public interface IRequestHandler<TRequest, TResponse>
     where TRequest : IRpcRequest<TResponse>
 {
-    Task<TResponse> HandleAsync(TRequest request);
+    Task<TResponse> HandleAsync(TRequest request, CancellationToken cancellationToken);
 }
 
 public interface IRequestResponseFactory
 {
     void RegisterHandlers(ILookup<Type, Type> handlers);
     ILookup<Type, Type> GetHandlers();
-    IRequestHandler<TRequest, TResponse> CreateHandler<TRequest, TResponse>(string tenant, IServiceProvider serviceProvider) where TRequest : IRpcRequest<TResponse>;
+    IRequestHandler<TRequest, TResponse> CreateHandler<TRequest, TResponse>(string tenant, IServiceProvider serviceProvider, CancellationToken cancellationToken = default) where TRequest : IRpcRequest<TResponse>;
 }
 
 public class RequestResponseFactory : IRequestResponseFactory
@@ -41,7 +42,7 @@ public class RequestResponseFactory : IRequestResponseFactory
         return _requestHandlerTypes;
     }
 
-    public IRequestHandler<TRequest, TResponse> CreateHandler<TRequest, TResponse>(string tenant, IServiceProvider serviceProvider) where TRequest : IRpcRequest<TResponse>
+    public IRequestHandler<TRequest, TResponse> CreateHandler<TRequest, TResponse>(string tenant, IServiceProvider serviceProvider, CancellationToken cancellationToken = default) where TRequest : IRpcRequest<TResponse>
     {
         IGrouping<Type, Type> handlers = _requestHandlerTypes.FirstOrDefault(x => x.Contains(typeof(TRequest)));
 
@@ -49,7 +50,7 @@ public class RequestResponseFactory : IRequestResponseFactory
             throw new ApplicationException("No handler registered for type: " + typeof(TRequest).FullName);
 
         DefaultContextFactory contextFactory = serviceProvider.GetRequiredService<DefaultContextFactory>();
-        contextFactory.Create(tenant, serviceProvider);
+        contextFactory.Create(tenant, serviceProvider, cancellationToken);
 
         ConstructorInfo[] constructors = handlers.Key.GetConstructors();
         if (constructors.Length == 1 && constructors.First().GetParameters().Length == 0)
