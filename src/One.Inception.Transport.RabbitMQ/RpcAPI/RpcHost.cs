@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Runtime.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace One.Inception.Transport.RabbitMQ.RpcAPI;
@@ -104,12 +105,19 @@ public class RpcHost : IRpcHost
         }
     }
 
-    public async Task StopAsync()
+    public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        foreach (IRpc service in services)
+        using var timeout = cancellationToken.CanBeCanceled ? null : new CancellationTokenSource(hostOptions.ShutdownTimeout);
+        CancellationToken deadline = timeout?.Token ?? cancellationToken;
+        try
         {
-            await service?.StopConsumersAsync();
+            await Task.WhenAll(services.Cast<IRpc>().Select(service => service.StopConsumersAsync(deadline))).WaitAsync(deadline).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            logger.LogWarning("RPC shutdown deadline expired. Unfinished requests will not be acknowledged.");
+        }
+        services.Clear();
     }
 
     public void Dispose()

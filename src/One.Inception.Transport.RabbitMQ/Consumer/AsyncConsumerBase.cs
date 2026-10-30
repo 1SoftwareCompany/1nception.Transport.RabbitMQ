@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using One.Inception.MessageProcessing;
@@ -16,14 +16,22 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
     protected readonly ILogger logger;
     protected readonly ISerializer serializer;
     protected readonly IChannel channel;
-    private bool isСurrentlyConsuming;
+    private readonly CancellationTokenSource handlingSource;
+    private readonly object lifecycleGate = new();
+    private readonly TaskCompletionSource drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int inFlight;
+    private bool stopping;
+    private Task stopTask;
 
-    public AsyncConsumerBase(IChannel channel, ISerializer serializer, ILogger logger) : base(channel)
+    protected CancellationToken HandlingToken { get; }
+
+    public AsyncConsumerBase(IChannel channel, ISerializer serializer, ILogger logger, CancellationToken cancellationToken = default) : base(channel)
     {
         this.channel = channel;
         this.serializer = serializer;
         this.logger = logger;
-        isСurrentlyConsuming = false;
+        handlingSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        HandlingToken = handlingSource.Token;
         ReceivedAsync += AsyncListener_Received;
     }
 
@@ -31,52 +39,167 @@ public abstract class AsyncConsumerBase : AsyncEventingBasicConsumer
 
     public abstract Task StartAsync();
 
-    public async Task StopAsync()
+    public Task StopAsync(CancellationToken cancellationToken = default)
     {
-        // 1. We detach the listener so ther will be no new messages coming from the queue
-        ReceivedAsync -= AsyncListener_Received;
-
-        // 2. Wait to handle any messages in progress
-        while (isСurrentlyConsuming)
+        lock (lifecycleGate)
         {
-            // We are trying to wait all consumers to finish their current work.
-            // Ofcourse the host could be forcibly shut down but we are doing our best.
-            await Task.Delay(10).ConfigureAwait(false);
-        }
+            if (stopTask is not null)
+                return stopTask;
 
-        if (channel.IsOpen)
-            await channel.AbortAsync();
+            stopping = true;
+            if (inFlight == 0)
+                drained.TrySetResult();
+
+            return stopTask = StopCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
+    {
+        Task cancellation = handlingSource.CancelAsync();
+        Task completion = DisposeSourceAfterDrainAsync(cancellation);
+        try
+        {
+            if (channel.IsOpen)
+            {
+                foreach (string tag in ConsumerTags)
+                {
+                    // Waiting for cancel-ok can deadlock behind the active delivery callback.
+                    await channel.BasicCancelAsync(tag, noWait: true, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning("Consumer shutdown deadline expired. Unfinished deliveries will not be acknowledged.");
+        }
+        finally
+        {
+            if (channel.IsOpen)
+            {
+                try
+                {
+                    // Closing the channel returns unacknowledged deliveries to RabbitMQ.
+                    await channel.AbortAsync().WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    logger.LogWarning("Channel shutdown is still waiting for an unfinished delivery callback.");
+                }
+            }
+        }
+    }
+
+    private async Task DisposeSourceAfterDrainAsync(Task cancellation)
+    {
+        try
+        {
+            try { await cancellation.ConfigureAwait(false); }
+            catch (Exception ex) { logger.LogError(ex, "A handler cancellation callback failed."); }
+
+            await drained.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            handlingSource.Dispose();
+        }
     }
 
     private async Task AsyncListener_Received(object sender, BasicDeliverEventArgs @event)
     {
-        using (logger.BeginScope(s =>
+        lock (lifecycleGate)
         {
-            if (@event.BasicProperties.IsHeadersPresent() && @event.BasicProperties.Headers.TryGetValue("messageid", out object messageIdBytes))
-            {
-                var messageId = new Guid((byte[])messageIdBytes);
-                s.AddScope("messageid", messageId.ToString());
-            }
-        }))
-        {
-            try
-            {
-                if (logger.IsEnabled(LogLevel.Debug))
-                    logger.LogDebug("Message received. Sender {sender}.", sender.GetType().Name);
-                isСurrentlyConsuming = true;
+            if (stopping || HandlingToken.IsCancellationRequested)
+                return; // Leave buffered deliveries unacknowledged for channel closure.
+            inFlight++;
+        }
 
+        try
+        {
+            using (logger.BeginScope(s =>
+            {
+                if (@event.BasicProperties.IsHeadersPresent() && @event.BasicProperties.Headers.TryGetValue("messageid", out object messageIdBytes))
+                {
+                    var messageId = new Guid((byte[])messageIdBytes);
+                    s.AddScope("messageid", messageId.ToString());
+                }
+            }))
+            {
                 if (sender is AsyncEventingBasicConsumer consumer)
                     await DeliverMessageToSubscribersAsync(@event, consumer).ConfigureAwait(false);
             }
-            catch (Exception ex) when (True(() => logger.LogError(ex, $"Failed to deliver message. MesasgeData: {Convert.ToBase64String(@event.Body.ToArray())}")))
+        }
+        catch (OperationCanceledException) when (HandlingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Message handling cancelled during consumer shutdown. Delivery left unacknowledged.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to deliver message. MessageData: {data}", Convert.ToBase64String(@event.Body.ToArray()));
+            throw;
+        }
+        finally
+        {
+            lock (lifecycleGate)
             {
-                throw;
-            }
-            finally
-            {
-                isСurrentlyConsuming = false;
+                if (--inFlight == 0 && stopping)
+                    drained.TrySetResult();
             }
         }
+    }
+
+    protected async Task ProcessMessageAsync(BasicDeliverEventArgs ev, Func<InceptionMessage, IEnumerable<ISubscriber>> resolveSubscribers)
+    {
+        InceptionMessage message;
+        try
+        {
+            message = ExpandRawPayload(serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray()));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
+            await AckAsync(ev).ConfigureAwait(false);
+            return;
+        }
+
+        List<Task> tasks = new();
+        try
+        {
+            foreach (ISubscriber subscriber in resolveSubscribers(message))
+            {
+                tasks.Add(SafeProcessAsync(subscriber, message));
+            }
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (Exception) when (HandlingToken.IsCancellationRequested && tasks.Any(t => t.IsCanceled))
+        {
+            // WhenAll can throw a fault even when another subscriber was cancelled.
+            throw new OperationCanceledException(HandlingToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}",
+                message.GetMessageType(), message,
+                string.Join(Environment.NewLine, tasks.Where(t => t.IsFaulted).Select(t => t.Exception)));
+        }
+
+        // Preserve the existing ordinary-error policy, but never ACK shutdown cancellation.
+        await AckAsync(ev).ConfigureAwait(false);
+    }
+
+    private Task SafeProcessAsync(ISubscriber subscriber, InceptionMessage message)
+    {
+        try { return subscriber.ProcessAsync(message, HandlingToken); }
+        catch (OperationCanceledException) when (HandlingToken.IsCancellationRequested) { return Task.FromCanceled(HandlingToken); }
+        catch (Exception ex) { return Task.FromException(ex); }
+    }
+
+    protected async Task AckAsync(BasicDeliverEventArgs ev)
+    {
+        if (channel.IsOpen)
+            await channel.BasicAckAsync(ev.DeliveryTag, false).ConfigureAwait(false);
     }
 
     protected InceptionMessage ExpandRawPayload(InceptionMessage inceptionMessage)
@@ -95,82 +218,16 @@ public abstract class AsyncConsumerBase<TSubscriber> : AsyncConsumerBase
 {
     private readonly ISubscriberCollection<TSubscriber> subscriberCollection;
 
-    public AsyncConsumerBase(IChannel channel, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger) : base(channel, serializer, logger)
+    public AsyncConsumerBase(IChannel channel, ISubscriberCollection<TSubscriber> subscriberCollection, ISerializer serializer, ILogger logger, CancellationToken cancellationToken = default)
+        : base(channel, serializer, logger, cancellationToken)
     {
         this.subscriberCollection = subscriberCollection;
     }
 
-    private Task SafeProcessAsync(ISubscriber subscriber, InceptionMessage InceptionMessage)
+    protected override Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
     {
-        try
-        {
-            return subscriber.ProcessAsync(InceptionMessage);
-        }
-        catch (Exception ex)
-        {
-            return Task.FromException(ex);
-        }
-    }
-
-    protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
-    {
-        InceptionMessage inceptionMessage = null;
-        List<Task> deliverTasks = new List<Task>();
-        try
-        {
-            inceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
-            inceptionMessage = ExpandRawPayload(inceptionMessage);
-        }
-        catch (Exception ex)
-        {
-            // TODO: send to dead letter exchange/queue
-            // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
-            logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
-            await AckAsync(ev, consumer).ConfigureAwait(false);
-
-            return;
-        }
-
-        var subscribers = subscriberCollection.GetInterestedSubscribers(inceptionMessage);
-        IEnumerable<ISubscriber> subscribersWithDedicatedQueues = subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly();
-        var onlyTheTrueSubscribers = subscribers.Except(subscribersWithDedicatedQueues);
-
-        try
-        {
-            foreach (var subscriber in onlyTheTrueSubscribers)
-            {
-                deliverTasks.Add(SafeProcessAsync(subscriber, inceptionMessage));
-            }
-
-            await Task.WhenAll(deliverTasks).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (True(() =>
-            {
-                // Try find some errors
-                StringBuilder subscriberErrors = new StringBuilder();
-                foreach (Task subscriberCompletedTasks in deliverTasks)
-                {
-                    if (subscriberCompletedTasks.IsFaulted)
-                    {
-                        subscriberErrors.AppendLine(subscriberCompletedTasks.Exception.ToString());
-                    }
-                }
-                logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", inceptionMessage.GetMessageType(), inceptionMessage, subscriberErrors.ToString());
-            }
-        ))
-        { }
-        finally
-        {
-            await AckAsync(ev, consumer).ConfigureAwait(false);
-        }
-
-        async Task AckAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
-        {
-            if (consumer.Channel.IsOpen)
-            {
-                await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
-            }
-        }
+        return ProcessMessageAsync(ev, message => subscriberCollection.GetInterestedSubscribers(message)
+            .Except(subscriberCollection.Subscribers.SubscribersWithDedicatedQueuesOnly()));
     }
 }
 
@@ -178,72 +235,14 @@ public abstract class AsyncConsumerCustomForSingleSubscriberBase : AsyncConsumer
 {
     private readonly ISubscriber subscriber;
 
-    public AsyncConsumerCustomForSingleSubscriberBase(IChannel channel, ISubscriber subscriber, ISerializer serializer, ILogger logger) : base(channel, serializer, logger)
+    public AsyncConsumerCustomForSingleSubscriberBase(IChannel channel, ISubscriber subscriber, ISerializer serializer, ILogger logger, CancellationToken cancellationToken = default)
+        : base(channel, serializer, logger, cancellationToken)
     {
         this.subscriber = subscriber;
     }
 
-    private Task SafeProcessAsync(ISubscriber subscriber, InceptionMessage InceptionMessage)
+    protected override Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
     {
-        try
-        {
-            return subscriber.ProcessAsync(InceptionMessage);
-        }
-        catch (Exception ex)
-        {
-            return Task.FromException(ex);
-        }
-    }
-
-    protected override async Task DeliverMessageToSubscribersAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
-    {
-        InceptionMessage inceptionMessage = null;
-        try
-        {
-            inceptionMessage = serializer.DeserializeFromBytes<InceptionMessage>(ev.Body.ToArray());
-            inceptionMessage = ExpandRawPayload(inceptionMessage);
-        }
-        catch (Exception ex)
-        {
-            // TODO: send to dead letter exchange/queue
-            // TODO: log meta data which is stored in ev.Properties so we know what is the source of the message
-            logger.LogError(ex, "Failed to process message. Failed to deserialize: {data}", ev.Body.ToArray());
-            await AckAsync(ev, consumer).ConfigureAwait(false);
-
-            return;
-        }
-
-        Task task = null;
-        try
-        {
-            task = SafeProcessAsync(subscriber, inceptionMessage);
-
-            await task.ConfigureAwait(false);
-        }
-        catch (Exception ex) when (True(() =>
-        {
-            // Try find some errors
-            StringBuilder subscriberError = new StringBuilder();
-
-            if (task.IsFaulted)
-            {
-                subscriberError.AppendLine(task.Exception.ToString());
-            }
-            logger.LogError(ex, "Failed to process {messageType} {@messageData}. Actual errors {errors}", inceptionMessage.GetMessageType(), inceptionMessage, subscriberError.ToString());
-        }
-        ))
-        { }
-        finally
-        {
-            await AckAsync(ev, consumer).ConfigureAwait(false);
-        }
-
-        async Task AckAsync(BasicDeliverEventArgs ev, AsyncEventingBasicConsumer consumer)
-        {
-            if (consumer.Channel.IsOpen)
-            {
-                await consumer.Channel.BasicAckAsync(ev.DeliveryTag, false);
-            }
-        }
+        return ProcessMessageAsync(ev, _ => new[] { subscriber });
     }
 }
