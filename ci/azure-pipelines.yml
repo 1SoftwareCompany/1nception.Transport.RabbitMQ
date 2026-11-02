@@ -40,7 +40,7 @@ stages:
 - stage : DeployStage
   displayName: 'Deploy stage'
   dependsOn:
-    - RunTestsDotnet9
+    - RunTestsDotnet10
 
   jobs:
   - job: build_pack_publish
