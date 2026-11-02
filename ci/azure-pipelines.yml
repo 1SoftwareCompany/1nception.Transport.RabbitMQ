@@ -13,8 +13,8 @@ pool:
 
 stages:
 
-- stage: RunTestsDotnet9
-  displayName: 'Run tests for dotnet 9'
+- stage: RunTestsDotnet10
+  displayName: 'Run tests for dotnet 10'
   jobs:
   - job: run_tests
 
@@ -26,7 +26,7 @@ stages:
     - task: UseDotNet@2
       inputs:
         packageType: 'sdk'
-        version: '9.x'
+        version: '10.x'
         includePreviewVersions: true
 
     - task: DotNetCoreCLI@2
@@ -34,7 +34,7 @@ stages:
       inputs:
         command: test
         projects: '**/*Tests.csproj'
-        arguments: '--framework net9.0'
+        arguments: '--framework net10.0'
 
 
 - stage : DeployStage
