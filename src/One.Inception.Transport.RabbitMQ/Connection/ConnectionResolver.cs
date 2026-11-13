@@ -20,6 +20,7 @@ public class ConnectionResolver : IDisposable
 
     internal const string Publish = "publish";
     internal const string Consume = "consume";
+    internal const string Broadcast = "broadcast";
 
     public ConnectionResolver(IRabbitMqConnectionFactory connectionFactory, ILogger<ConnectionResolver> logger, CancellationToken cancellationToken = default)
     {

@@ -63,7 +63,7 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
                 if (logger.IsEnabled(LogLevel.Debug))
                     logger.LogDebug("Published message to exchange {exchange} with headers {@headers}.", exchange, props.Headers);
 
-            }).ConfigureAwait(false);
+            }, BuildPublisherConnectionKey).ConfigureAwait(false);
 
             return new PublishResult(true, result); // is this correct?
         }
@@ -94,6 +94,8 @@ public abstract class RabbitMqPublisherBase<TMessage> : Publisher<TMessage> wher
 
         return properties;
     }
+
+    protected virtual string BuildPublisherConnectionKey(IRabbitMqOptions options) => options.GetConnectionKey(ConnectionResolver.Publish);
 
     private IEnumerable<string> GetExistingExchangesNames(InceptionMessage message)
     {

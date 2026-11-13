@@ -24,6 +24,7 @@ public class RabbitMqPublisherDiscovery : DiscoveryBase<IPublisher<IMessage>>
         yield return new DiscoveredModel(typeof(PrivateRabbitMqPublisher<>), typeof(PrivateRabbitMqPublisher<>), ServiceLifetime.Singleton);
         yield return new DiscoveredModel(typeof(PublicRabbitMqPublisher), typeof(PublicRabbitMqPublisher), ServiceLifetime.Singleton);
         yield return new DiscoveredModel(typeof(SignalRabbitMqPublisher), typeof(SignalRabbitMqPublisher), ServiceLifetime.Singleton);
+        yield return new DiscoveredModel(typeof(NodeBroadcastRabbitMqPublisher), typeof(NodeBroadcastRabbitMqPublisher), ServiceLifetime.Singleton);
 
         var publisherModel = new DiscoveredModel(typeof(IPublisher<>), typeof(PrivateRabbitMqPublisher<>), ServiceLifetime.Singleton);
         publisherModel.CanOverrideDefaults = true;
@@ -36,6 +37,10 @@ public class RabbitMqPublisherDiscovery : DiscoveryBase<IPublisher<IMessage>>
         var signalPublisherModel = new DiscoveredModel(typeof(IPublisher<ISignal>), typeof(SignalRabbitMqPublisher), ServiceLifetime.Singleton);
         signalPublisherModel.CanOverrideDefaults = true;
         yield return signalPublisherModel;
+
+        var broadcastPublisherModel = new DiscoveredModel(typeof(IPublisher<IBroadcast>), typeof(NodeBroadcastRabbitMqPublisher), ServiceLifetime.Singleton);
+        broadcastPublisherModel.CanOverrideDefaults = true;
+        yield return broadcastPublisherModel;
 
         yield return new DiscoveredModel(typeof(RabbitMqInfrastructure), typeof(RabbitMqInfrastructure), ServiceLifetime.Singleton);
 

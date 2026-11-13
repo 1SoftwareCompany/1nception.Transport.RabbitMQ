@@ -32,14 +32,17 @@ public class PublisherChannelResolver
         return connectionsWithSlots.GetOrAdd(connectionKey, _ => new SemaphoreSlim(options.MaxChannelsForPublish, options.MaxChannelsForPublish)); // this guarantees that all callers get the same semaphore, even when they race on the first call for a connection
     }
 
-    public async Task<bool> UseChannelAsync(string exchange, IRabbitMqOptions options, string boundedContext, Func<IChannel, Task> publish)
+    public async Task<bool> UseChannelAsync(string exchange, IRabbitMqOptions options, string boundedContext, Func<IChannel, Task> publish, Func<IRabbitMqOptions, string> connectionKeyBuilder = null)
     {
         if (string.IsNullOrEmpty(exchange)) throw new ArgumentException("Exchange name cannot be null or empty.", nameof(exchange));
         if (options is null) throw new ArgumentNullException(nameof(options));
         if (string.IsNullOrEmpty(boundedContext)) throw new ArgumentNullException(nameof(boundedContext));
         if (publish is null) throw new ArgumentNullException(nameof(publish));
 
-        string connectionKey = options.GetConnectionKey(ConnectionResolver.Publish);
+        string connectionKey = connectionKeyBuilder is null
+            ? options.GetConnectionKey(ConnectionResolver.Publish)
+            : connectionKeyBuilder(options);
+
         try
         {
             return await UseChannelWithRetriesAsync(DateTimeOffset.UtcNow, 1, exchange, options, boundedContext, connectionKey, publish);

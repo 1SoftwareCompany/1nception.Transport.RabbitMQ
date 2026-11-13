@@ -139,7 +139,7 @@ public class ConsumerFactory<T>
 
     private async Task CreateAndStartNodeBroadcastConsumersAsync(CancellationToken cancellationToken)
     {
-        string connectionKey = options.GetConnectionKey(ConnectionResolver.Consume);
+        string connectionKey = options.GetConnectionKey(ConnectionResolver.Broadcast);
 
         string queueName = bcRabbitMqNamer.Get_NodeBroadcast_QueueName(typeof(T));
         for (int i = 0; i < consumerOptions.NodeBroadcastWorkersCount; i++)

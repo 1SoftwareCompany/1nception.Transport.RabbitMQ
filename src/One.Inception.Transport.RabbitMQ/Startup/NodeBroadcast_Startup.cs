@@ -59,7 +59,8 @@ public class NodeBroadcast_Startup : IInceptionStartup
 
     public async Task BootstrapInternalAsync(IEnumerable<string> allTenants)
     {
-        string key = options.GetConnectionKey(ConnectionResolver.Consume); // just reusing the same long lived connection, so that autorecovery will re-create the queue (its not durable). otherwise it will fail.
+        string key = options.GetConnectionKey(ConnectionResolver.Broadcast); // just reusing the same long lived connection, so that autorecovery will re-create the queue (its not durable). otherwise it will fail.
+                                                                             // -- We must use the same connection for publishing and consuming, because the queue is exclusive.
         IConnection connection = await connectionResolver.ResolveAsync(options, key).ConfigureAwait(true);
         using (var channel = await connection.CreateChannelAsync().ConfigureAwait(false))
         {
