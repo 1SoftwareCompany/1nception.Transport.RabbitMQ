@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -27,71 +28,126 @@ public class RabbitMqConnectionFactory<TOptions> : IRabbitMqConnectionFactory wh
 {
 
     private readonly ILogger<RabbitMqConnectionFactory<TOptions>> logger;
-    private readonly TOptions options;
+    private readonly IOptionsMonitor<TOptions> optionsMonitor;
 
     public RabbitMqConnectionFactory(IOptionsMonitor<TOptions> optionsMonitor, ILogger<RabbitMqConnectionFactory<TOptions>> logger)
     {
-        options = optionsMonitor.CurrentValue;
+        this.optionsMonitor = optionsMonitor;
         this.logger = logger;
     }
 
     public Task<IConnection> CreateConnectionAsync(string connectionName = null)
     {
-        return CreateConnectionWithOptionsAsync(options, connectionName);
+        return CreateConnectionInternalAsync(() => optionsMonitor.CurrentValue, connectionName);
     }
 
-    public async Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options, string connectionName = null)
+    public Task<IConnection> CreateConnectionWithOptionsAsync(IRabbitMqOptions options, string connectionName = null)
     {
-        if (logger.IsEnabled(LogLevel.Debug))
-            logger.LogDebug("Loaded RabbitMQ options are {@Options}", options);
+        return CreateConnectionInternalAsync(() => ResolveLatestOptions(options), connectionName);
+    }
 
+    private async Task<IConnection> CreateConnectionInternalAsync(Func<IRabbitMqOptions> getOptions, string connectionName = null)
+    {
         if (string.IsNullOrEmpty(connectionName))
             connectionName = "temp";
 
-        bool tailRecursion = false;
+        CancellationTokenSource delayCts = null;
+        using IDisposable changeSubscription = optionsMonitor.OnChange(_ => CancelDelay(delayCts));
 
-        do
+        while (true)
         {
-            try
-            {
-                var connectionFactory = new ConnectionFactory();
-                connectionFactory.Port = options.Port;
-                connectionFactory.UserName = options.Username;
-                connectionFactory.Password = options.Password;
-                connectionFactory.VirtualHost = options.VHost;
-                connectionFactory.AutomaticRecoveryEnabled = true;
-                connectionFactory.Ssl.Enabled = options.UseSsl;
-                connectionFactory.EndpointResolverFactory = (_) => MultipleEndpointResolver.ComposeEndpointResolver(options);
-                connectionFactory.ClientProvidedName = connectionName;
+            IRabbitMqOptions currentOptions = getOptions();
+            IConnection connection = await TryConnectAsync(currentOptions, connectionName);
+            if (connection is not null)
+                return connection;
 
-                // Always await within a try/catch to handle possible exceptions
-                IConnection newConnection = await connectionFactory.CreateConnectionAsync();
-                if (logger.IsEnabled(LogLevel.Information))
-                    logger.LogInformation("Successfully created RabbitMQ connection using options {@options}", options);
-
-                KillBill.RecoveryInterval = connectionFactory.NetworkRecoveryInterval;
-                KillBill.HeartbeatTimeout = connectionFactory.RequestedHeartbeat;
-
-
-                return newConnection;
-            }
-            catch (Exception ex)
-            {
-                if (ex is BrokerUnreachableException)
-                    logger.LogWarning("Failed to create RabbitMQ connection using options {@options}. Retrying...", options);
-                else
-                    logger.LogWarning(ex, "Failed to create RabbitMQ connection using options {@options}. Retrying...", options);
-
-                tailRecursion = true;
-            }
-
-            if (tailRecursion)
-                await Task.Delay(5000);
-
+            delayCts = new CancellationTokenSource();
+            await WaitBeforeRetryAsync(delayCts);
+            delayCts = null;
         }
-        while (tailRecursion == true);
+    }
 
-        return default;
+    private async Task<IConnection> TryConnectAsync(IRabbitMqOptions currentOptions, string connectionName)
+    {
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("Loaded RabbitMQ options are {@Options}", currentOptions);
+
+        try
+        {
+            var connectionFactory = new ConnectionFactory
+            {
+                Port = currentOptions.Port,
+                UserName = currentOptions.Username,
+                Password = currentOptions.Password,
+                VirtualHost = currentOptions.VHost,
+                AutomaticRecoveryEnabled = true,
+                EndpointResolverFactory = (_) => MultipleEndpointResolver.ComposeEndpointResolver(currentOptions),
+                ClientProvidedName = connectionName
+            };
+            connectionFactory.Ssl.Enabled = currentOptions.UseSsl;
+
+            // Always await within a try/catch to handle possible exceptions
+            IConnection newConnection = await connectionFactory.CreateConnectionAsync();
+            if (logger.IsEnabled(LogLevel.Information))
+                logger.LogInformation("Successfully created RabbitMQ connection using options {@options}", currentOptions);
+
+            KillBill.RecoveryInterval = connectionFactory.NetworkRecoveryInterval;
+            KillBill.HeartbeatTimeout = connectionFactory.RequestedHeartbeat;
+
+            return newConnection;
+        }
+        catch (Exception ex)
+        {
+            if (ex is BrokerUnreachableException)
+                logger.LogWarning("Failed to create RabbitMQ connection using options {@options}. Retrying...", currentOptions);
+            else
+                logger.LogWarning(ex, "Failed to create RabbitMQ connection using options {@options}. Retrying...", currentOptions);
+
+            return null;
+        }
+    }
+
+    private IRabbitMqOptions ResolveLatestOptions(IRabbitMqOptions initialOptions)
+    {
+        if (initialOptions is not TOptions)
+            return initialOptions;
+
+        TOptions current = optionsMonitor.CurrentValue;
+        if (current is null)
+            return initialOptions;
+
+        if (string.IsNullOrEmpty(initialOptions.BoundedContext) is false)
+            return current.GetOptionsFor(initialOptions.BoundedContext) ?? current;
+
+        return current;
+    }
+
+    private static async Task WaitBeforeRetryAsync(CancellationTokenSource delayCts)
+    {
+        try
+        {
+            await Task.Delay(5000, delayCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Options changed while waiting; retry immediately with updated options.
+        }
+        finally
+        {
+            delayCts.Dispose();
+        }
+    }
+
+    private static void CancelDelay(CancellationTokenSource delayCts)
+    {
+        try
+        {
+            delayCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Delay token was already disposed as the iteration completed.
+        }
     }
 
     private class MultipleEndpointResolver : DefaultEndpointResolver
